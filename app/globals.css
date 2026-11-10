@@ -1,0 +1,141 @@
+@import "tailwindcss";
+
+@keyframes carepact-appear {
+  from { opacity: 0; translate: 0 6px; }
+  to { opacity: 1; translate: 0 0; }
+}
+
+@keyframes carepact-page-fade {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+@keyframes proposal-drawer-appear {
+  from { opacity: 0; translate: 16px 0; }
+  to { opacity: 1; translate: 0 0; }
+}
+
+@media screen and (prefers-reduced-motion: no-preference) {
+  .home-intro {
+    animation: carepact-appear 0.4s ease-out;
+  }
+  .home-actions {
+    animation: carepact-appear 0.4s ease-out 0.06s backwards;
+  }
+  [data-home-reveal][data-reveal-pending] {
+    opacity: 0;
+  }
+  .home-revealed {
+    animation: carepact-appear 0.4s ease-out;
+  }
+  .home-preview.home-revealed {
+    animation: carepact-page-fade 0.25s ease-out;
+  }
+  .room-page-enter {
+    animation: carepact-page-fade 0.2s ease-out;
+  }
+  .proposal-drawer[open] {
+    animation: proposal-drawer-appear 0.2s ease-out;
+  }
+  :where(button, a[href]) {
+    transition: background-color 0.2s ease-out, border-color 0.2s ease-out,
+      color 0.2s ease-out, box-shadow 0.2s ease-out, filter 0.2s ease-out;
+  }
+  :where(button, a[href]):active:not(:disabled):not([aria-disabled="true"]) {
+    filter: brightness(0.96);
+  }
+}
+
+@media screen and (prefers-reduced-motion: no-preference) and (hover: hover) {
+  :where(button, a[href]):hover:not(:disabled):not([aria-disabled="true"]) {
+    filter: brightness(1.04);
+  }
+  :where(button, a[href]):hover:active:not(:disabled):not([aria-disabled="true"]) {
+    filter: brightness(0.96);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation: none !important;
+    transition: none !important;
+    scroll-behavior: auto !important;
+  }
+}
+
+@media screen and (width < 40rem) {
+  .mobile-page {
+    overflow-wrap: anywhere;
+  }
+
+  .mobile-page button,
+  .mobile-page summary,
+  .mobile-page select,
+  .mobile-page input:not([type="checkbox"]):not([type="radio"]) {
+    min-height: 2.75rem;
+  }
+
+  .mobile-page [class~="text-[9px]"],
+  .mobile-page [class~="text-[10px]"],
+  .mobile-page [class~="text-[11px]"] {
+    font-size: 0.75rem;
+  }
+
+  /* 同じカレンダー要素を曜日ごとの縦並びにする。印刷・PCは従来の表。 */
+  .summary-calendar-grid {
+    display: grid;
+    min-width: 0;
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .summary-calendar-heading,
+  .summary-calendar-body {
+    display: contents;
+  }
+  .summary-calendar-heading > :first-child,
+  .summary-calendar-body > :first-child,
+  .summary-calendar-hour {
+    display: none;
+  }
+  .summary-calendar-heading > :nth-child(2) { grid-row: 1; }
+  .summary-calendar-body > :nth-child(2) { grid-row: 2; }
+  .summary-calendar-heading > :nth-child(3) { grid-row: 3; }
+  .summary-calendar-body > :nth-child(3) { grid-row: 4; }
+  .summary-calendar-heading > :nth-child(4) { grid-row: 5; }
+  .summary-calendar-body > :nth-child(4) { grid-row: 6; }
+  .summary-calendar-heading > :nth-child(5) { grid-row: 7; }
+  .summary-calendar-body > :nth-child(5) { grid-row: 8; }
+  .summary-calendar-heading > :nth-child(6) { grid-row: 9; }
+  .summary-calendar-body > :nth-child(6) { grid-row: 10; }
+  .summary-calendar-heading > :nth-child(7) { grid-row: 11; }
+  .summary-calendar-body > :nth-child(7) { grid-row: 12; }
+  .summary-calendar-heading > :nth-child(8) { grid-row: 13; }
+  .summary-calendar-body > :nth-child(8) { grid-row: 14; }
+  .summary-calendar-heading > div {
+    background: var(--color-neutral-100);
+    border-bottom: 1px solid var(--color-neutral-300);
+  }
+  .summary-calendar-day {
+    height: auto !important;
+    min-height: 0.5rem;
+    padding: 0.25rem;
+    border-bottom: 1px solid var(--color-neutral-300);
+  }
+  .summary-calendar-placement {
+    position: static;
+    height: auto !important;
+    margin-bottom: 0.25rem;
+    padding: 0.5rem;
+  }
+  .summary-calendar-placement > div {
+    display: block;
+    white-space: normal;
+    overflow: visible;
+    line-height: 1.5;
+  }
+}
+
+@layer base {
+  button:not(:disabled) {
+    cursor: pointer;
+  }
+}

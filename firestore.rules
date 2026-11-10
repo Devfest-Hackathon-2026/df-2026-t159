@@ -1,0 +1,121 @@
+rules_version = '2';
+
+// CarePact の Firestore セキュリティルール（Issue 2）
+//
+// 権限表（共通前提が正本）：
+// - 未参加者は全ルームデータを読めない
+// - 参加者（family／careManager）は people・placements・constraints・設定・summary・comments を閲覧できる
+// - 入力の更新と確定は family のみ
+// - コメントの作成は careManager のみ（authorUid＝認証UID、本文1〜1,000字、createdAt＝サーバー時刻）
+// - members ドキュメントを作れるのはサーバー（Admin SDK。ルールを経由しない）だけ
+// - people は初期登録後、変更不可
+// - invites（招待トークン）と rateLimits（Gemini 回数枠）はサーバー専用で、
+//   Client からの read/write を全面禁止する。ワイルドカードで read を開放しない
+// - ルールの合格条件：未参加者はそのルームを読めない／自分の role を昇格できない／
+//   他人の membership を変更できない／careManager はコメント作成以外の書き込みができない
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function memberDoc(roomId) {
+      return /databases/$(database)/documents/rooms/$(roomId)/members/$(request.auth.uid);
+    }
+
+    function isMember(roomId) {
+      return isSignedIn() && exists(memberDoc(roomId));
+    }
+
+    function isFamily(roomId) {
+      return isMember(roomId) && get(memberDoc(roomId)).data.role == 'family';
+    }
+
+    function isCareManager(roomId) {
+      return isMember(roomId) && get(memberDoc(roomId)).data.role == 'careManager';
+    }
+
+    match /rooms/{roomId} {
+      // ルーム本体（設定・revision）。作成はサーバーだけ（Admin SDK）
+      allow get: if isMember(roomId);
+      allow list: if false;
+      allow create, delete: if false;
+      // 更新は family のみ。creatorUid・isDemo・createdAt・careLevel は変更不可で、
+      // revision はちょうど +1 だけ進められる（commitRoomChange／リセットの書き込み形式）
+      allow update: if isFamily(roomId)
+        && request.resource.data.creatorUid == resource.data.creatorUid
+        && request.resource.data.isDemo == resource.data.isDemo
+        && request.resource.data.createdAt == resource.data.createdAt
+        && request.resource.data.careLevel == resource.data.careLevel
+        && request.resource.data.revision == resource.data.revision + 1;
+
+      // 家族（ボードに載る人）。更新は family のみ（Issue #71）。ドキュメントIDと中身の id を一致させる
+      match /people/{personId} {
+        allow read: if isMember(roomId);
+        allow create, update: if isFamily(roomId)
+          && request.resource.data.id == personId;
+        allow delete: if isFamily(roomId);
+      }
+
+      // 編集者（membership）。作れるのはサーバーだけ
+      match /members/{uid} {
+        // 自分のドキュメントは参加前でも読める（存在しない場合は「未参加」として扱える）。
+        // 他人のドキュメントは参加者だけが読める
+        allow get: if isSignedIn() && (request.auth.uid == uid || isMember(roomId));
+        allow list: if isMember(roomId);
+        allow write: if false;
+      }
+
+      // 配置。更新は family のみ。ドキュメントIDと中身の id を一致させる
+      match /placements/{placementId} {
+        allow read: if isMember(roomId);
+        allow create, update: if isFamily(roomId)
+          && request.resource.data.id == placementId;
+        allow delete: if isFamily(roomId);
+      }
+
+      // 制約一式（固定ドキュメントID main）。更新は family のみ
+      match /constraints/{docId} {
+        allow read: if isMember(roomId);
+        allow write: if isFamily(roomId) && docId == 'main';
+      }
+
+      // 確定スナップショット（固定ドキュメントID main）。確定は family のみ
+      match /summary/{docId} {
+        allow read: if isMember(roomId);
+        allow write: if isFamily(roomId) && docId == 'main';
+      }
+
+      // ケアマネのコメント。作成は careManager のみ、更新・削除は誰もできない
+      match /comments/{commentId} {
+        allow read: if isMember(roomId);
+        allow create: if isCareManager(roomId)
+          && request.resource.data.keys().hasOnly(['id', 'authorUid', 'body', 'createdAt'])
+          && request.resource.data.id == commentId
+          && request.resource.data.authorUid == request.auth.uid
+          && request.resource.data.body is string
+          && request.resource.data.body.size() >= 1
+          && request.resource.data.body.size() <= 1000
+          && request.resource.data.createdAt == request.time;
+        allow update, delete: if false;
+      }
+
+      // 招待トークン（サーバー専用。原本・ハッシュとも Client からは一切触れない）
+      match /invites/{inviteId} {
+        allow read, write: if false;
+      }
+
+      // Gemini 呼び出し回数枠（サーバー専用）
+      match /rateLimits/{docId} {
+        allow read, write: if false;
+      }
+    }
+
+    // 上記以外のパスはすべて拒否（デフォルト拒否を明示）
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}

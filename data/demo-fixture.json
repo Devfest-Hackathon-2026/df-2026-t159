@@ -1,0 +1,815 @@
+{
+  "acceptedPlan": {
+    "expectedValidationResult": {
+      "gaps": [],
+      "hardViolations": [],
+      "limitUnits": 27048,
+      "memberHours": [
+        {
+          "hours": 12,
+          "personId": "person-mother"
+        },
+        {
+          "hours": 18,
+          "personId": "person-daughter"
+        },
+        {
+          "hours": 12,
+          "personId": "person-son"
+        }
+      ],
+      "monthlyUnits": 24094,
+      "ok": true,
+      "overUnits": 0,
+      "overloads": [],
+      "selfPayBreakdown": {
+        "overYen": 0,
+        "withinYen": 24094
+      },
+      "selfPayYen": 24094,
+      "validationErrors": [],
+      "weeklyUnits": 5622
+    },
+    "placements": [
+      {
+        "day": 0,
+        "endHour": 9,
+        "id": "demo-visit-mon",
+        "kind": "visit",
+        "note": "朝の起床・トイレ介助",
+        "serviceId": "visit-body",
+        "startHour": 7
+      },
+      {
+        "day": 2,
+        "endHour": 9,
+        "id": "demo-visit-wed",
+        "kind": "visit",
+        "note": "朝の起床・トイレ介助",
+        "serviceId": "visit-body",
+        "startHour": 7
+      },
+      {
+        "day": 0,
+        "endHour": 16,
+        "id": "demo-daycare-mon",
+        "kind": "daycare",
+        "note": "通所介護",
+        "serviceId": "daycare-basic",
+        "startHour": 9
+      },
+      {
+        "day": 2,
+        "endHour": 16,
+        "id": "demo-daycare-wed",
+        "kind": "daycare",
+        "note": "通所介護",
+        "serviceId": "daycare-basic",
+        "startHour": 9
+      },
+      {
+        "day": 4,
+        "endHour": 16,
+        "id": "demo-daycare-fri",
+        "kind": "daycare",
+        "note": "通所介護",
+        "serviceId": "daycare-basic",
+        "startHour": 9
+      },
+      {
+        "day": 1,
+        "endHour": 14,
+        "id": "demo-dayrehab-tue",
+        "kind": "dayrehab",
+        "note": "通所リハビリ",
+        "serviceId": "dayrehab-basic",
+        "startHour": 10
+      },
+      {
+        "day": 3,
+        "endHour": 14,
+        "id": "demo-dayrehab-thu",
+        "kind": "dayrehab",
+        "note": "通所リハビリ",
+        "serviceId": "dayrehab-basic",
+        "startHour": 10
+      },
+      {
+        "day": 1,
+        "endHour": 9,
+        "id": "demo-daughter-tue-morning",
+        "kind": "family",
+        "note": "出勤前の見守り",
+        "personId": "person-daughter",
+        "startHour": 7
+      },
+      {
+        "day": 3,
+        "endHour": 9,
+        "id": "demo-daughter-thu-morning",
+        "kind": "family",
+        "note": "出勤前の見守り",
+        "personId": "person-daughter",
+        "startHour": 7
+      },
+      {
+        "day": 0,
+        "endHour": 19,
+        "id": "demo-mother-evening-mon",
+        "kind": "family",
+        "note": "夕食の準備と見守り",
+        "personId": "person-mother",
+        "startHour": 17
+      },
+      {
+        "day": 1,
+        "endHour": 19,
+        "id": "demo-mother-evening-tue",
+        "kind": "family",
+        "note": "夕食の準備と見守り",
+        "personId": "person-mother",
+        "startHour": 17
+      },
+      {
+        "day": 2,
+        "endHour": 19,
+        "id": "demo-mother-evening-wed",
+        "kind": "family",
+        "note": "夕食の準備と見守り",
+        "personId": "person-mother",
+        "startHour": 17
+      },
+      {
+        "day": 3,
+        "endHour": 19,
+        "id": "demo-mother-evening-thu",
+        "kind": "family",
+        "note": "夕食の準備と見守り",
+        "personId": "person-mother",
+        "startHour": 17
+      },
+      {
+        "day": 4,
+        "endHour": 19,
+        "id": "demo-mother-evening-fri",
+        "kind": "family",
+        "note": "夕食の準備と見守り",
+        "personId": "person-mother",
+        "startHour": 17
+      },
+      {
+        "day": 0,
+        "endHour": 21,
+        "id": "demo-daughter-evening-mon",
+        "kind": "family",
+        "note": "入浴介助と就寝準備",
+        "personId": "person-daughter",
+        "startHour": 19
+      },
+      {
+        "day": 1,
+        "endHour": 21,
+        "id": "demo-daughter-evening-tue",
+        "kind": "family",
+        "note": "入浴介助と就寝準備",
+        "personId": "person-daughter",
+        "startHour": 19
+      },
+      {
+        "day": 2,
+        "endHour": 21,
+        "id": "demo-daughter-evening-wed",
+        "kind": "family",
+        "note": "入浴介助と就寝準備",
+        "personId": "person-daughter",
+        "startHour": 19
+      },
+      {
+        "day": 3,
+        "endHour": 21,
+        "id": "demo-daughter-evening-thu",
+        "kind": "family",
+        "note": "入浴介助と就寝準備",
+        "personId": "person-daughter",
+        "startHour": 19
+      },
+      {
+        "day": 4,
+        "endHour": 21,
+        "id": "demo-daughter-evening-fri",
+        "kind": "family",
+        "note": "入浴介助と就寝準備",
+        "personId": "person-daughter",
+        "startHour": 19
+      },
+      {
+        "day": 5,
+        "endHour": 21,
+        "id": "demo-son-sat-evening",
+        "kind": "family",
+        "note": "土曜の夜は長男が担当",
+        "personId": "person-son",
+        "startHour": 17
+      },
+      {
+        "day": 6,
+        "endHour": 12,
+        "id": "demo-son-sun-morning",
+        "kind": "family",
+        "note": "日曜の午前は長男が担当",
+        "personId": "person-son",
+        "startHour": 8
+      },
+      {
+        "day": 6,
+        "endHour": 21,
+        "id": "demo-daughter-sun-evening",
+        "kind": "family",
+        "note": "日曜の夜は長女が担当",
+        "personId": "person-daughter",
+        "startHour": 17
+      },
+      {
+        "day": 4,
+        "endHour": 9,
+        "id": "demo-mother-fri-morning",
+        "kind": "family",
+        "note": "金曜の朝は母が見守り",
+        "personId": "person-mother",
+        "startHour": 7
+      },
+      {
+        "day": 5,
+        "endHour": 12,
+        "id": "demo-son-sat-morning",
+        "kind": "family",
+        "note": "土曜の午前は長男が担当",
+        "personId": "person-son",
+        "startHour": 8
+      }
+    ]
+  },
+  "careWindows": [
+    {
+      "day": 0,
+      "endHour": 9,
+      "startHour": 7
+    },
+    {
+      "day": 0,
+      "endHour": 14,
+      "startHour": 12
+    },
+    {
+      "day": 0,
+      "endHour": 21,
+      "startHour": 17
+    },
+    {
+      "day": 1,
+      "endHour": 9,
+      "startHour": 7
+    },
+    {
+      "day": 1,
+      "endHour": 14,
+      "startHour": 12
+    },
+    {
+      "day": 1,
+      "endHour": 21,
+      "startHour": 17
+    },
+    {
+      "day": 2,
+      "endHour": 9,
+      "startHour": 7
+    },
+    {
+      "day": 2,
+      "endHour": 14,
+      "startHour": 12
+    },
+    {
+      "day": 2,
+      "endHour": 21,
+      "startHour": 17
+    },
+    {
+      "day": 3,
+      "endHour": 9,
+      "startHour": 7
+    },
+    {
+      "day": 3,
+      "endHour": 14,
+      "startHour": 12
+    },
+    {
+      "day": 3,
+      "endHour": 21,
+      "startHour": 17
+    },
+    {
+      "day": 4,
+      "endHour": 9,
+      "startHour": 7
+    },
+    {
+      "day": 4,
+      "endHour": 14,
+      "startHour": 12
+    },
+    {
+      "day": 4,
+      "endHour": 21,
+      "startHour": 17
+    },
+    {
+      "day": 5,
+      "endHour": 12,
+      "startHour": 8
+    },
+    {
+      "day": 5,
+      "endHour": 21,
+      "startHour": 17
+    },
+    {
+      "day": 6,
+      "endHour": 12,
+      "startHour": 8
+    },
+    {
+      "day": 6,
+      "endHour": 21,
+      "startHour": 17
+    }
+  ],
+  "constraints": [
+    {
+      "days": [
+        0,
+        1,
+        2,
+        3,
+        4
+      ],
+      "detail": "平日は仕事のため日中は対応できない",
+      "endHour": 18,
+      "personId": "person-daughter",
+      "startHour": 9,
+      "type": "unavailable"
+    },
+    {
+      "days": [
+        0,
+        1,
+        2,
+        3,
+        4
+      ],
+      "detail": "遠方に住んでいるため平日は来られない",
+      "endHour": 24,
+      "personId": "person-son",
+      "startHour": 6,
+      "type": "unavailable"
+    },
+    {
+      "days": [
+        0,
+        1,
+        2,
+        3,
+        4,
+        5,
+        6
+      ],
+      "detail": "高齢で腰痛があるため、夜遅い時間の付き添いは難しい",
+      "endHour": 24,
+      "personId": "person-mother",
+      "startHour": 21,
+      "type": "unavailable"
+    },
+    {
+      "days": [],
+      "detail": "腰痛があるため、長時間の身体介助や入浴介助は避けたい",
+      "personId": "person-mother",
+      "type": "hope"
+    },
+    {
+      "days": [],
+      "detail": "住み慣れた自宅で過ごしたい。朝のトイレ介助に不安がある",
+      "personId": "person-father",
+      "type": "hope"
+    }
+  ],
+  "copayRate": 1,
+  "documents": {
+    "dischargeSummary": "退院時サマリー（ご家族向け控え）\n\n医療機関：サンプル総合病院（架空の医療機関です）\n患者：佐藤 正一 様（78歳・男性）\n傷病名：脳梗塞（左片麻痺）\n入院期間：2026年10月12日から入院中\n退院予定日：2026年11月11日（水）\n\n経過：発症後に急性期治療とリハビリテーションを行い、歩行は屋内で見守りがあれば可能な状態まで回復しました。退院後はご自宅での療養となります。\n\n現在の状態と退院後の留意点：\n・歩行：屋内は見守りから軽い介助の範囲です。転倒に注意してください\n・トイレ：声かけと一部介助が必要です。特に朝の起床時は、介助者がそばにいてください\n・入浴：介助が必要です。一人での入浴は避けてください\n・食事：普通食が食べられます。飲み込みに問題はありません\n・服薬：家族の確認があると安心です\n・介護保険：要介護3の認定を受けています\n・退院後も通所リハビリテーションの継続が望ましい状態です\n\n担当：医療ソーシャルワーカー（退院支援担当）\n※この書類はハッカソンのデモ用に作成した架空のサンプルです。実在の人物・医療機関とは関係ありません。",
+    "familyMemo": "家族メモ（長女が記入）\n\n父は来週の水曜日（11月11日）に退院予定です。退院後は自宅で療養します。\n私は平日9時から18時まで仕事があり、日中は父のそばにいられません。ただし仕事の前に家に寄ることはできます。\n長男は遠方に住んでいて、平日は来られません。週末は帰省して手伝ってくれます。\n母は父と同居していますが、腰痛があり、長時間の介助や入浴の介助は難しいです。夜遅い時間の対応も負担が大きいようです。\n父本人は「住み慣れた自宅で過ごしたい」と言っています。朝のトイレ介助に不安があるようです。\n費用は、できるだけ介護保険の枠内に収めたいと思っています。\n週末は家族で交代して、誰か一人が抱え込まないようにしたいです。\nケアマネジャーとの初回面談で、この内容をもとに相談したいと思っています。"
+  },
+  "familyProfile": {
+    "familyName": "佐藤家",
+    "members": [
+      {
+        "personId": "person-father",
+        "profile": "佐藤 正一（78歳）。脳梗塞で入院中、来週水曜に退院予定。要介護3。本人は自宅での療養を希望している。付き添いはできない（canProvideCare=false）"
+      },
+      {
+        "personId": "person-mother",
+        "profile": "佐藤 君江（75歳）。父と同居。腰痛があり長時間の介助や入浴介助は難しいが、短時間の見守りや食事の準備はできる"
+      },
+      {
+        "personId": "person-daughter",
+        "profile": "佐藤 美咲（45歳）。近居（自転車で約10分）。平日9時〜18時は仕事。出勤前と夜は対応できる"
+      },
+      {
+        "personId": "person-son",
+        "profile": "佐藤 健太（42歳）。遠方に在住（電車で約2時間）。平日は来られないが、週末は帰省できる"
+      }
+    ],
+    "note": "デモ用の架空の家族設定です。実在の人物とは関係ありません。"
+  },
+  "fixedProposal": {
+    "changes": [
+      {
+        "action": "resize",
+        "endHour": 16,
+        "placementId": "demo-daycare-wed",
+        "startHour": 9
+      },
+      {
+        "action": "resize",
+        "endHour": 14,
+        "placementId": "demo-dayrehab-tue",
+        "startHour": 10
+      },
+      {
+        "action": "resize",
+        "endHour": 14,
+        "placementId": "demo-dayrehab-thu",
+        "startHour": 10
+      },
+      {
+        "action": "remove",
+        "placementId": "demo-visit-fri"
+      },
+      {
+        "action": "resize",
+        "endHour": 21,
+        "placementId": "demo-daughter-evening-mon",
+        "startHour": 19
+      },
+      {
+        "action": "resize",
+        "endHour": 21,
+        "placementId": "demo-daughter-evening-tue",
+        "startHour": 19
+      },
+      {
+        "action": "resize",
+        "endHour": 21,
+        "placementId": "demo-daughter-evening-wed",
+        "startHour": 19
+      },
+      {
+        "action": "resize",
+        "endHour": 21,
+        "placementId": "demo-daughter-evening-thu",
+        "startHour": 19
+      },
+      {
+        "action": "resize",
+        "endHour": 21,
+        "placementId": "demo-daughter-evening-fri",
+        "startHour": 19
+      },
+      {
+        "action": "add",
+        "day": 4,
+        "endHour": 9,
+        "kind": "family",
+        "note": "金曜の朝は母が見守り",
+        "personId": "person-mother",
+        "placementId": "demo-mother-fri-morning",
+        "startHour": 7
+      },
+      {
+        "action": "remove",
+        "placementId": "demo-daughter-sat-morning"
+      },
+      {
+        "action": "add",
+        "day": 5,
+        "endHour": 12,
+        "kind": "family",
+        "note": "土曜の午前は長男が担当",
+        "personId": "person-son",
+        "placementId": "demo-son-sat-morning",
+        "startHour": 8
+      }
+    ],
+    "summary": "水曜の通所介護を終日（9時から16時）に延ばして昼の空白を埋め、火曜と木曜の通所リハビリを10時から14時に短縮します。金曜朝の訪問介護は母の見守りに替え、平日の夜は母（17時から19時）と長女（19時から21時）で分けます。土曜の午前は長男が担当し、長女の負担を分散します。"
+  },
+  "fixtureVersion": "0.1.0-draft",
+  "hopes": [
+    "父は住み慣れた自宅で療養したい",
+    "母に無理をさせたくない",
+    "週末は家族で交代し、誰か一人が抱え込まないようにしたい",
+    "費用はできるだけ介護保険の枠内に収めたい"
+  ],
+  "masterVersion": "reiwa6-basic-units-v1",
+  "people": [
+    {
+      "canProvideCare": false,
+      "careRole": "recipient",
+      "icon": "👴",
+      "id": "person-father",
+      "name": "父"
+    },
+    {
+      "canProvideCare": true,
+      "careRole": "caregiver",
+      "icon": "👵",
+      "id": "person-mother",
+      "name": "母"
+    },
+    {
+      "canProvideCare": true,
+      "careRole": "caregiver",
+      "icon": "👩",
+      "id": "person-daughter",
+      "name": "長女"
+    },
+    {
+      "canProvideCare": true,
+      "careRole": "caregiver",
+      "icon": "👨",
+      "id": "person-son",
+      "name": "長男"
+    }
+  ],
+  "troubledPlan": {
+    "expectedValidationResult": {
+      "gaps": [
+        {
+          "day": 2,
+          "endHour": 14,
+          "startHour": 12
+        }
+      ],
+      "hardViolations": [],
+      "limitUnits": 27048,
+      "memberHours": [
+        {
+          "hours": 10,
+          "personId": "person-mother"
+        },
+        {
+          "hours": 27,
+          "personId": "person-daughter"
+        },
+        {
+          "hours": 8,
+          "personId": "person-son"
+        }
+      ],
+      "monthlyUnits": 28131,
+      "ok": false,
+      "overUnits": 1083,
+      "overloads": [
+        {
+          "hours": 27,
+          "personId": "person-daughter"
+        }
+      ],
+      "selfPayBreakdown": {
+        "overYen": 10830,
+        "withinYen": 27048
+      },
+      "selfPayYen": 37878,
+      "validationErrors": [],
+      "weeklyUnits": 6564
+    },
+    "placements": [
+      {
+        "day": 0,
+        "endHour": 9,
+        "id": "demo-visit-mon",
+        "kind": "visit",
+        "note": "朝の起床・トイレ介助",
+        "serviceId": "visit-body",
+        "startHour": 7
+      },
+      {
+        "day": 2,
+        "endHour": 9,
+        "id": "demo-visit-wed",
+        "kind": "visit",
+        "note": "朝の起床・トイレ介助",
+        "serviceId": "visit-body",
+        "startHour": 7
+      },
+      {
+        "day": 4,
+        "endHour": 9,
+        "id": "demo-visit-fri",
+        "kind": "visit",
+        "note": "朝の起床・トイレ介助",
+        "serviceId": "visit-body",
+        "startHour": 7
+      },
+      {
+        "day": 0,
+        "endHour": 16,
+        "id": "demo-daycare-mon",
+        "kind": "daycare",
+        "note": "通所介護",
+        "serviceId": "daycare-basic",
+        "startHour": 9
+      },
+      {
+        "day": 2,
+        "endHour": 12,
+        "id": "demo-daycare-wed",
+        "kind": "daycare",
+        "note": "通所介護",
+        "serviceId": "daycare-basic",
+        "startHour": 9
+      },
+      {
+        "day": 4,
+        "endHour": 16,
+        "id": "demo-daycare-fri",
+        "kind": "daycare",
+        "note": "通所介護",
+        "serviceId": "daycare-basic",
+        "startHour": 9
+      },
+      {
+        "day": 1,
+        "endHour": 16,
+        "id": "demo-dayrehab-tue",
+        "kind": "dayrehab",
+        "note": "通所リハビリ",
+        "serviceId": "dayrehab-basic",
+        "startHour": 9
+      },
+      {
+        "day": 3,
+        "endHour": 16,
+        "id": "demo-dayrehab-thu",
+        "kind": "dayrehab",
+        "note": "通所リハビリ",
+        "serviceId": "dayrehab-basic",
+        "startHour": 9
+      },
+      {
+        "day": 1,
+        "endHour": 9,
+        "id": "demo-daughter-tue-morning",
+        "kind": "family",
+        "note": "出勤前の見守り",
+        "personId": "person-daughter",
+        "startHour": 7
+      },
+      {
+        "day": 3,
+        "endHour": 9,
+        "id": "demo-daughter-thu-morning",
+        "kind": "family",
+        "note": "出勤前の見守り",
+        "personId": "person-daughter",
+        "startHour": 7
+      },
+      {
+        "day": 0,
+        "endHour": 19,
+        "id": "demo-mother-evening-mon",
+        "kind": "family",
+        "note": "夕食の準備と見守り",
+        "personId": "person-mother",
+        "startHour": 17
+      },
+      {
+        "day": 1,
+        "endHour": 19,
+        "id": "demo-mother-evening-tue",
+        "kind": "family",
+        "note": "夕食の準備と見守り",
+        "personId": "person-mother",
+        "startHour": 17
+      },
+      {
+        "day": 2,
+        "endHour": 19,
+        "id": "demo-mother-evening-wed",
+        "kind": "family",
+        "note": "夕食の準備と見守り",
+        "personId": "person-mother",
+        "startHour": 17
+      },
+      {
+        "day": 3,
+        "endHour": 19,
+        "id": "demo-mother-evening-thu",
+        "kind": "family",
+        "note": "夕食の準備と見守り",
+        "personId": "person-mother",
+        "startHour": 17
+      },
+      {
+        "day": 4,
+        "endHour": 19,
+        "id": "demo-mother-evening-fri",
+        "kind": "family",
+        "note": "夕食の準備と見守り",
+        "personId": "person-mother",
+        "startHour": 17
+      },
+      {
+        "day": 0,
+        "endHour": 21,
+        "id": "demo-daughter-evening-mon",
+        "kind": "family",
+        "note": "入浴介助と就寝準備",
+        "personId": "person-daughter",
+        "startHour": 18
+      },
+      {
+        "day": 1,
+        "endHour": 21,
+        "id": "demo-daughter-evening-tue",
+        "kind": "family",
+        "note": "入浴介助と就寝準備",
+        "personId": "person-daughter",
+        "startHour": 18
+      },
+      {
+        "day": 2,
+        "endHour": 21,
+        "id": "demo-daughter-evening-wed",
+        "kind": "family",
+        "note": "入浴介助と就寝準備",
+        "personId": "person-daughter",
+        "startHour": 18
+      },
+      {
+        "day": 3,
+        "endHour": 21,
+        "id": "demo-daughter-evening-thu",
+        "kind": "family",
+        "note": "入浴介助と就寝準備",
+        "personId": "person-daughter",
+        "startHour": 18
+      },
+      {
+        "day": 4,
+        "endHour": 21,
+        "id": "demo-daughter-evening-fri",
+        "kind": "family",
+        "note": "入浴介助と就寝準備",
+        "personId": "person-daughter",
+        "startHour": 18
+      },
+      {
+        "day": 5,
+        "endHour": 12,
+        "id": "demo-daughter-sat-morning",
+        "kind": "family",
+        "note": "土曜の午前は長女が担当",
+        "personId": "person-daughter",
+        "startHour": 8
+      },
+      {
+        "day": 5,
+        "endHour": 21,
+        "id": "demo-son-sat-evening",
+        "kind": "family",
+        "note": "土曜の夜は長男が担当",
+        "personId": "person-son",
+        "startHour": 17
+      },
+      {
+        "day": 6,
+        "endHour": 12,
+        "id": "demo-son-sun-morning",
+        "kind": "family",
+        "note": "日曜の午前は長男が担当",
+        "personId": "person-son",
+        "startHour": 8
+      },
+      {
+        "day": 6,
+        "endHour": 21,
+        "id": "demo-daughter-sun-evening",
+        "kind": "family",
+        "note": "日曜の夜は長女が担当",
+        "personId": "person-daughter",
+        "startHour": 17
+      }
+    ]
+  },
+  "unknowns": []
+}
