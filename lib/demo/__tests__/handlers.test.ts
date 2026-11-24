@@ -79,6 +79,97 @@ describe("デモ機能ハンドラ群（handlers.ts）", () => {
       expect(snap?.constraints).toEqual([]);
       expect(snap?.people).toHaveLength(4);
     });
+
+    it("name を指定するとトリムして保存し、空白のみは省略し、不正な型や30文字超は 400 を返す", async () => {
+      const ports = setup();
+      const namedRes = await handleCreateDemoRoomRequest(ports, {
+        idToken: creatorToken,
+        name: "  佐藤家のデモ  ",
+      });
+      expect(namedRes.status).toBe(201);
+      const { roomId } = namedRes.body as { roomId: string };
+      expect((await ports.fakeStore.getDemoMeta(roomId))?.name).toBe("佐藤家のデモ");
+
+      const blankRes = await handleCreateDemoRoomRequest(ports, {
+        idToken: creatorToken,
+        name: "   ",
+      });
+      expect(blankRes.status).toBe(201);
+      const { roomId: blankId } = blankRes.body as { roomId: string };
+      expect((await ports.fakeStore.getDemoMeta(blankId))?.name).toBeUndefined();
+
+      const tooLongRes = await handleCreateDemoRoomRequest(ports, {
+        idToken: creatorToken,
+        name: "あ".repeat(31),
+      });
+      expect(tooLongRes.status).toBe(400);
+      expect((tooLongRes.body as { error: string }).error).toBe("invalid_room_name");
+
+      const invalidTypeRes = await handleCreateDemoRoomRequest(ports, {
+        idToken: creatorToken,
+        name: 123,
+      });
+      expect(invalidTypeRes.status).toBe(400);
+      expect((invalidTypeRes.body as { error: string }).error).toBe("invalid_room_name");
+    });
+
+    it("sonName を指定すると person-son の表示名だけを上書きし、固定代替案の照合も通過する", async () => {
+      const ports = setup();
+      const createRes = await handleCreateDemoRoomRequest(ports, {
+        idToken: creatorToken,
+        sonName: "  健太  ",
+      });
+      expect(createRes.status).toBe(201);
+      const { roomId, personMapping } = createRes.body as {
+        roomId: string;
+        personMapping: Record<string, string>;
+      };
+
+      const snap = await ports.fakeStore.getSnapshot(roomId);
+      const son = snap?.people.find((p) => p.id === personMapping["person-son"]);
+      expect(son?.name).toBe("健太");
+      expect(son?.canProvideCare).toBe(true);
+      expect(snap?.people.find((p) => p.id === personMapping["person-father"])?.name).toBe("父");
+
+      // 長男の表示名を変えても固定代替案が問題なく発行できる
+      const propRes = await handleDemoProposalsRequest(ports, {
+        idToken: creatorToken,
+        roomId,
+        baseRevision: 0,
+      });
+      expect(propRes.status).toBe(200);
+      expect((propRes.body as { demo: boolean }).demo).toBe(true);
+
+      // 空白のみは既定値「長男」のまま、型違い・50文字超は 400
+      const blankRes = await handleCreateDemoRoomRequest(ports, {
+        idToken: creatorToken,
+        sonName: "   ",
+      });
+      expect(blankRes.status).toBe(201);
+      const blankBody = blankRes.body as {
+        roomId: string;
+        personMapping: Record<string, string>;
+      };
+      const blankSnap = await ports.fakeStore.getSnapshot(blankBody.roomId);
+      expect(
+        blankSnap?.people.find((p) => p.id === blankBody.personMapping["person-son"])
+          ?.name,
+      ).toBe("長男");
+
+      const tooLongRes = await handleCreateDemoRoomRequest(ports, {
+        idToken: creatorToken,
+        sonName: "あ".repeat(51),
+      });
+      expect(tooLongRes.status).toBe(400);
+      expect((tooLongRes.body as { error: string }).error).toBe("invalid_son_name");
+
+      const invalidTypeRes = await handleCreateDemoRoomRequest(ports, {
+        idToken: creatorToken,
+        sonName: 123,
+      });
+      expect(invalidTypeRes.status).toBe(400);
+      expect((invalidTypeRes.body as { error: string }).error).toBe("invalid_son_name");
+    });
   });
 
   describe("handleResetDemoRoomRequest", () => {
@@ -223,6 +314,59 @@ describe("デモ機能ハンドラ群（handlers.ts）", () => {
       const snap = await ports.fakeStore.getSnapshot(roomId);
       expect(snap?.revision).toBe(1);
       expect(snap?.placements.length).toBeGreaterThan(0);
+    });
+
+    it("採用後の配置を見本の24件に戻し、入力内容を引き継ぐ", async () => {
+      const ports = setup();
+      const created = await handleCreateDemoRoomRequest(ports, { idToken: creatorToken });
+      const { roomId, personMapping } = created.body as { roomId: string; personMapping: Record<string, string> };
+      const original = (await ports.fakeStore.getSnapshot(roomId))!;
+      const accepted = {
+        ...original,
+        placements: mapPlacements(fx.acceptedPlan.placements, personMapping),
+        hopes: ["入力済みの希望"],
+        revision: 7,
+      };
+      ports.fakeStore.setSnapshot(roomId, accepted);
+      const result = await handleDemoSeedRequest(ports, { idToken: creatorToken, roomId });
+      expect(result.status).toBe(200);
+      const restored = await ports.fakeStore.getSnapshot(roomId);
+      expect(restored?.placements).toHaveLength(24);
+      expect(restored).toEqual({
+        ...accepted, placements: mapPlacements(fx.troubledPlan.placements, personMapping), revision: 8,
+      });
+    });
+
+    it("sonName を渡して投入すると person-son の表示名も上書きされる", async () => {
+      const ports = setup();
+      const createRes = await handleCreateDemoRoomRequest(ports, {
+        idToken: creatorToken,
+        initialState: "empty",
+      });
+      const { roomId, personMapping } = createRes.body as {
+        roomId: string;
+        personMapping: Record<string, string>;
+      };
+
+      const seedRes = await handleDemoSeedRequest(ports, {
+        idToken: creatorToken,
+        roomId,
+        sonName: "  太郎  ",
+      });
+      expect(seedRes.status).toBe(200);
+
+      const snap = await ports.fakeStore.getSnapshot(roomId);
+      expect(
+        snap?.people.find((p) => p.id === personMapping["person-son"])?.name,
+      ).toBe("太郎");
+
+      const invalidRes = await handleDemoSeedRequest(ports, {
+        idToken: creatorToken,
+        roomId,
+        sonName: 999,
+      });
+      expect(invalidRes.status).toBe(400);
+      expect((invalidRes.body as { error: string }).error).toBe("invalid_son_name");
     });
   });
 

@@ -1,9 +1,16 @@
+import { createElement } from "react";
+import { renderToStaticMarkup } from "react-dom/server";
+import SummarySheet from "../../../components/SummarySheet";
 import { describe, expect, it } from "vitest";
 import { Timestamp } from "firebase/firestore";
 import { applyChanges } from "../../apply-changes";
 import { demoFixture } from "../../demo-fixture";
 import { bindStructureDrafts } from "../../ai/structureSave";
-import { evaluateProposalApplication } from "../../plan/logic";
+import type { DemoStructureResult } from "../types";
+import { reviewDraftsFromStructureResult, separateDatelessHopes, toStructureSaveConstraints } from "../../structure-review";
+import { extractDemoTrialPlacement, buildNormalizedDemoTrialPlacements, isValidDemoTrialPlacementInput } from "../../demo-board-tutorial";
+import { isSummaryConfirmed, formatSummaryBurden } from "../../summary-sheet";
+import { evaluateConfirmation, evaluateProposalApplication } from "../../plan/logic";
 import type { Proposal, RoomSnapshot } from "../../types";
 import { validateRoom } from "../../validation";
 import { createFakeDemoPorts } from "../fakes";
@@ -27,6 +34,56 @@ describe("デモ通し・ライフサイクル・保証のテスト（Issue 15�
     ports.fakeAuth.setToken(creatorToken, creatorUid);
     return ports;
   }
+
+  it.each([true, false])("見本入力の保存=%s：土曜の体験配置から固定案の取得・採用・確定・まとめシートまで進める", async saveInput => {
+    const ports = setup();
+    const request = { idToken: creatorToken };
+    const created = await handleCreateDemoRoomRequest(ports, { ...request, initialState: "troubled" });
+    const { roomId } = created.body as { roomId: string };
+    let snapshot = (await ports.fakeStore.getSnapshot(roomId))!;
+    if (saveInput) {
+      const response = await handleDemoStructureRequest(ports, { ...request, roomId });
+      expect(response.status).toBe(200);
+      const draft = response.body as DemoStructureResult;
+      const separated = separateDatelessHopes(reviewDraftsFromStructureResult(draft, snapshot.people), draft.hopes);
+      const names = new Map(snapshot.people.map(person => [person.id, person.name]));
+      const saved = bindStructureDrafts({
+        constraints: toStructureSaveConstraints(separated.drafts, names),
+        hopes: separated.hopes, unknowns: draft.unknowns,
+      }, snapshot.people);
+      expect(saved.constraints).toHaveLength(3);
+      expect(saved.hopes).toHaveLength(6);
+      snapshot = { ...snapshot, ...saved, revision: snapshot.revision + 1 };
+      ports.fakeStore.setSnapshot(roomId, snapshot);
+    }
+    const trial = extractDemoTrialPlacement(snapshot.placements)!;
+    const daughter = snapshot.people.find(person => person.name === "長女")!;
+    expect(isValidDemoTrialPlacementInput({ kind: "family", personId: daughter.id, day: 5, startHour: 8, endHour: 12 }, trial.canonicalPlacement.personId)).toBe(true);
+    snapshot = { ...snapshot, revision: snapshot.revision + 1, placements: buildNormalizedDemoTrialPlacements(
+      trial.maskedPlacements, trial.canonicalPlacement, trial.originalIndex,
+    ) };
+    ports.fakeStore.setSnapshot(roomId, snapshot);
+    expect(validateRoom(snapshot).selfPayYen).toBe(37878);
+    const response = await handleDemoProposalsRequest(ports, { ...request, roomId, baseRevision: snapshot.revision });
+    expect(response.status).toBe(200);
+    const { proposals } = response.body as { proposals: Proposal[] };
+    expect(proposals).toHaveLength(1);
+    const applied = evaluateProposalApplication(snapshot, proposals[0], validateRoom);
+    if (applied.kind !== "applicable") throw new Error("固定案を採用できません");
+    snapshot = { ...snapshot, revision: snapshot.revision + 1, placements: applied.nextPlacements };
+    ports.fakeStore.setSnapshot(roomId, snapshot);
+    const confirmed = evaluateConfirmation(snapshot, snapshot.revision, validateRoom);
+    if (confirmed.kind !== "confirmable") throw new Error("採用した案を確定できません");
+    ports.fakeStore.setSummary(roomId, { snapshot, validation: confirmed.validation, confirmedRevision: snapshot.revision, confirmedAt: Timestamp.now() });
+    const summary = ports.fakeStore.getSummary(roomId)!;
+    expect(isSummaryConfirmed(summary, snapshot.revision)).toBe(true);
+    const burden = formatSummaryBurden(summary.validation, snapshot.people);
+    expect(burden.selfPayTotalText).toBe("24,094 円");
+    const sheet = renderToStaticMarkup(createElement(SummarySheet, { roomId, summary, currentRevision: snapshot.revision }));
+    expect(sheet).toContain("確定済み");
+    expect(sheet).toContain("24,094");
+    expect(Object.fromEntries(burden.memberHours.map(m => [m.name, m.hours]))).toEqual({ 母: 12, 長女: 18, 長男: 12 });
+  });
 
   /**
    * 【仕様 4 の保証のテスト】

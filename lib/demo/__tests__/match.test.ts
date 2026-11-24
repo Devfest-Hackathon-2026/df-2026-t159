@@ -82,6 +82,17 @@ describe("デモ入力スナップショット照合（match.ts）", () => {
     expect(mismatch.field).toBe("people");
   });
 
+  it("people の表示名（長男など）が変更されていても他が一致していれば matched: true を返す", () => {
+    const snapshot: RoomSnapshot = {
+      ...defaultSnapshot,
+      people: defaultSnapshot.people.map((p) =>
+        p.id === personMapping["person-son"] ? { ...p, name: "健太" } : p,
+      ),
+    };
+    const result = matchDemoSnapshot(snapshot, defaultMeta, fx);
+    expect(result.matched).toBe(true);
+  });
+
   it("people の canProvideCare が異なる場合は照合に失敗する", () => {
     const snapshot: RoomSnapshot = {
       ...defaultSnapshot,
@@ -123,6 +134,15 @@ describe("デモ入力スナップショット照合（match.ts）", () => {
     };
     const mismatch = assertMismatch(matchDemoSnapshot(snapshot, defaultMeta, fx));
     expect(mismatch.field).toBe("constraints");
+  });
+
+  it("保存後の自由記述で希望を削除・書き換えた場合は固定案を返さない", () => {
+    const moved = defaultSnapshot.constraints.filter(c => c.type === "hope" && !c.days.length);
+    const kept = defaultSnapshot.constraints.filter(c => !moved.includes(c));
+    const hopes = [...defaultSnapshot.hopes, ...moved.map(c => c.detail)];
+    for (const changed of [hopes.slice(0, -1), [...hopes.slice(0, -1), "変更した希望"]]) {
+      expect(assertMismatch(matchDemoSnapshot({ ...defaultSnapshot, constraints: kept, hopes: changed }, defaultMeta, fx)).field).toBe("hopes");
+    }
   });
 
   it("希望（hopes）が異なる場合は照合に失敗する", () => {
