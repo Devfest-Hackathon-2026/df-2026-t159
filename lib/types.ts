@@ -65,6 +65,7 @@ export interface Person {
   canProvideCare: boolean;
   careRole?: CareRole;
   icon?: string;
+  order?: number;
 }
 
 /** 編集者（members）の役割 */
@@ -110,12 +111,21 @@ export interface Placement {
 // 制約（Constraint）と支援必要時間（careWindows）
 // ---------------------------------------------------------------------------
 
-export type ConstraintType = "hope" | "unavailable" | "other";
+export type ActiveConstraintType = "unavailable" | "available" | "hope";
+
+/**
+ * 制約の分類。
+ * 新規作成では unavailable（対応不可）／available（対応可）／hope（希望）の3種のみを使う。
+ * other は既存ルームの読み取り・保存互換のために型に残す。
+ */
+export type ConstraintType = ActiveConstraintType | "other";
 
 interface ConstraintBase {
   /** people の ID（保存時は必ず personId に結びつける） */
   personId: string;
   detail: string;
+  /** AI が曖昧な表現から仮置きした時刻かどうか（確認・修正されると外す） */
+  provisional?: boolean;
 }
 
 /**
@@ -131,9 +141,9 @@ export interface TimedConstraint extends ConstraintBase {
   endHour: number;
 }
 
-/** 時刻を持たない（または任意の）制約（希望・その他） */
+/** 時刻を持たない（または任意の）制約（対応可・希望・既存互換のその他） */
 export interface FreeformConstraint extends ConstraintBase {
-  type: "hope" | "other";
+  type: "available" | "hope" | "other";
   days: DayIndex[];
   startHour?: number;
   endHour?: number;
@@ -163,6 +173,8 @@ export interface ConstraintDraft {
   days: DayIndex[];
   startHour?: number;
   endHour?: number;
+  /** AI が曖昧な表現から仮置きした時刻かどうか */
+  provisional?: boolean;
 }
 
 /** 介護が必要な時間帯（ルーム設定に持つ）。「空白」はこの中で配置も付き添いもない時間だけを指す */
@@ -559,6 +571,8 @@ export const firestorePaths = {
 
 /** rooms/{roomId} 本体のドキュメント形状 */
 export interface RoomDoc {
+  /** ルーム名（任意。未設定の既存ルームとの後方互換のため省略可） */
+  name?: string;
   /** ルーム作成者の認証 UID。変更不可 */
   creatorUid: string;
   /** デモ用ルームかどうか。一般 Client による変更不可 */
@@ -592,13 +606,11 @@ export type CommentDoc = RoomComment;
 /**
  * 招待トークンの保存値（サーバー専用。ドキュメントIDはトークンのハッシュ）。
  * 参加時はこの保存値だけを検証・採用し、リクエストで送られた role は採用しない。
- * トークンは128bit以上のランダム値・有効24時間・1回のみ使用。
+ * トークンは128bit以上のランダム値・有効24時間・期限内は回数制限なし。
  */
 export interface InviteDoc {
   role: MemberRole;
   expiresAt: Timestamp;
-  /** 使用済みの時刻。未使用なら null */
-  usedAt: Timestamp | null;
   createdAt: Timestamp;
 }
 
