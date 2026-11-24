@@ -1,81 +1,142 @@
 import Link from "next/link";
+import { scopeCopy } from "@/lib/scope-copy";
 import Image from "next/image";
 import DemoCreateButton from "@/components/DemoCreateButton";
-import HomeReveal from "@/components/HomeReveal";
+import "./home.css";
+import PlacementIcon from "@/components/PlacementIcon";
+import HomeSplash from "@/components/HomeSplash";
+import { openHomeSplash } from "@/lib/home-splash";
+import { Users, CalendarDays, Bus, TriangleAlert } from "lucide-react";
 import RecentRoomsList from "@/components/RecentRoomsList";
 import Logo from "@/components/Logo";
 import { demoFixture } from "@/lib/demo-fixture";
+import { computePlacementColumns, DAYS, HOURS, KIND_LABELS } from "@/lib/board";
+import type { Placement, PlacementKind } from "@/lib/types";
 
 export const dynamic = "force-dynamic";
 
-const DAYS = ["月", "火", "水", "木", "金", "土", "日"];
-const HOURS = Array.from({ length: 18 }, (_, index) => index + 6);
-const ROW_HEIGHT = 18;
+const ROW_HEIGHT = 24;
 
-const PREVIEW_STYLES = {
-  visit: { label: "訪問介護", color: "border-sky-200 bg-sky-100 text-sky-950" },
-  daycare: { label: "通所介護", color: "border-emerald-200 bg-emerald-100 text-emerald-950" },
-  dayrehab: { label: "通所リハビリ", color: "border-violet-200 bg-violet-100 text-violet-950" },
-  family: { label: "家族の付き添い", color: "border-amber-200 bg-amber-100 text-amber-950" },
+const PREVIEW_COLORS: Record<PlacementKind, string> = {
+  visit: "border-sky-300 bg-sky-100 text-sky-950",
+  daycare: "border-emerald-300 bg-emerald-100 text-emerald-950",
+  dayrehab: "border-fuchsia-400 bg-fuchsia-200 text-fuchsia-950",
+  shortstay: "border-violet-300 bg-violet-100 text-violet-950",
+  family: "border-amber-300 bg-amber-100 text-amber-950",
 };
 
-const FAMILY_LABELS: Record<string, string> = {
-  "person-mother": "母の付き添い",
-  "person-daughter": "長女の付き添い",
-  "person-son": "長男の付き添い",
-};
+const PREVIEW_LEGEND_KINDS: readonly PlacementKind[] = [
+  "visit",
+  "daycare",
+  "dayrehab",
+  "family",
+];
 
-const FAMILY_ICONS: Record<string, string> = {
-  "person-mother": "👵",
-  "person-daughter": "👩",
-  "person-son": "👨",
-};
+// トップページの静的な週間ボード見本（納得プラン＝acceptedPlan に合わせる）
+const PREVIEW_PLACEMENTS: readonly Placement[] =
+  demoFixture.acceptedPlan.placements;
+const PREVIEW_VALIDATION = demoFixture.acceptedPlan.expectedValidationResult;
+const PREVIEW_MEMBER_HOURS = PREVIEW_VALIDATION.memberHours.map((item) => {
+  const person = demoFixture.people.find((p) => p.id === item.personId);
+  return {
+    personId: item.personId,
+    name: person?.name ?? item.personId,
+    hours: item.hours,
+  };
+});
+const PREVIEW_TOTAL_CARE_HOURS = PREVIEW_MEMBER_HOURS.reduce(
+  (sum, item) => sum + item.hours,
+  0,
+);
 
-const SERVICE_LABELS: Record<string, string> = {
-  visit: "訪問介護",
-  daycare: "通所介護",
-  dayrehab: "通所リハビリ",
-  shortstay: "ショートステイ",
-};
-
-// トップページの静的な週間ボード見本（実際のデモ初期データ＝troubledPlan のシードに合わせる）
-const PREVIEW_PLACEMENTS: {
-  day: number;
-  startHour: number;
-  endHour: number;
-  kind: keyof typeof PREVIEW_STYLES;
-  label: string;
-  icon?: string;
-}[] = demoFixture.troubledPlan.placements.map((p) => ({
-  day: p.day,
-  startHour: p.startHour,
-  endHour: p.endHour,
-  kind: p.kind as keyof typeof PREVIEW_STYLES,
-  label: (p.personId ? FAMILY_LABELS[p.personId] : undefined) ?? SERVICE_LABELS[p.kind] ?? "予定",
-  icon: p.personId ? FAMILY_ICONS[p.personId] : undefined,
-}));
+function previewLabelFor(placement: Placement): string {
+  if (placement.kind === "family") {
+    const person = demoFixture.people.find((p) => p.id === placement.personId);
+    return `${person?.name ?? placement.personId}の付き添い`;
+  }
+  return KIND_LABELS[placement.kind];
+}
 
 function WeeklyBoardPreview() {
+  const dayLayouts = DAYS.map((_, dayIndex) => {
+    const placements = PREVIEW_PLACEMENTS.filter(
+      (placement) => placement.day === dayIndex,
+    );
+    return {
+      placements,
+      columns: computePlacementColumns(placements),
+    };
+  });
+
+  const monthlyUnitsText =
+    PREVIEW_VALIDATION.monthlyUnits !== null
+      ? `${PREVIEW_VALIDATION.monthlyUnits.toLocaleString()}単位`
+      : "未判定";
+  const selfPayYenText =
+    PREVIEW_VALIDATION.selfPayYen !== null
+      ? `${PREVIEW_VALIDATION.selfPayYen.toLocaleString()}円`
+      : "未判定";
+
   return (
     <figure className="overflow-hidden rounded-2xl border border-violet-100 bg-white shadow-lg shadow-indigo-950/5">
       <figcaption className="flex flex-wrap items-center justify-between gap-2 border-b border-neutral-100 px-4 py-2.5 sm:px-5">
         <div>
-          <p className="text-xs font-bold tracking-wider text-violet-600">できあがるプランのイメージ</p>
-          <h2 id="preview-title" className="text-base font-bold text-neutral-900 sm:text-lg">家族の予定を、ひと目で。</h2>
+          <p className="text-xs font-bold tracking-wider text-violet-600">
+            できあがるプランのイメージ
+          </p>
+          <h2
+            id="preview-title"
+            className="text-base font-bold text-neutral-900 sm:text-lg"
+          >
+            家族の予定を、ひと目で。
+          </h2>
         </div>
-        <span className="rounded-full bg-violet-50 px-2.5 py-0.5 text-xs font-medium text-violet-700">週間ボードの見本</span>
+        <span className="rounded-full bg-violet-50 px-2.5 py-0.5 text-xs font-medium text-violet-700">
+          納得プランの見本（{demoFixture.familyProfile.familyName}・要介護3）
+        </span>
       </figcaption>
 
+      <div
+        aria-label="納得プランの目安"
+        className="flex flex-wrap items-center gap-x-4 gap-y-1.5 border-b border-emerald-100 bg-emerald-50/80 px-4 py-2 text-xs text-emerald-950 sm:px-5"
+      >
+        <span className="inline-flex items-center gap-1.5 font-semibold">
+          <span className="rounded-full bg-emerald-600 px-2 py-0.5 text-[11px] font-bold text-white">
+            {PREVIEW_VALIDATION.overUnits === 0 ? "枠内" : "上限超過"}
+          </span>
+          <span>
+            {monthlyUnitsText}（上限{" "}
+            {PREVIEW_VALIDATION.limitUnits.toLocaleString()}単位以内）
+          </span>
+        </span>
+        <span className="font-semibold">自己負担：{selfPayYenText}</span>
+        <span className="font-semibold">
+          家族の負担：
+          {PREVIEW_MEMBER_HOURS.map((m) => `${m.name} ${m.hours}時間`).join(
+            "・",
+          )}
+          （合計 {PREVIEW_TOTAL_CARE_HOURS}時間／週）
+        </span>
+      </div>
+
       <div className="px-3 py-2.5 sm:px-4 sm:py-3">
-        <ul aria-label="予定の種類" className="mb-2 flex flex-wrap gap-x-3 gap-y-1 text-xs text-neutral-600">
-          {Object.entries(PREVIEW_STYLES).map(([kind, style]) => (
+        <ul
+          aria-label="予定の種類"
+          className="mb-2 flex flex-wrap gap-x-3 gap-y-1 text-xs text-neutral-600"
+        >
+          {PREVIEW_LEGEND_KINDS.map((kind) => (
             <li key={kind} className="flex items-center gap-1.5">
-              <span aria-hidden="true" className={`h-2.5 w-2.5 rounded-sm border ${style.color}`} />
-              {style.label}
+              <span
+                aria-hidden="true"
+                className={`h-2.5 w-2.5 rounded-sm border ${PREVIEW_COLORS[kind]}`}
+              />
+              {KIND_LABELS[kind]}
             </li>
           ))}
         </ul>
-        <p className="mb-2 text-xs text-neutral-500 sm:hidden">横にスクロールして、全曜日を確認できます。</p>
+        <p className="mb-2 text-xs text-neutral-500 sm:hidden">
+          横にスクロールして、全曜日を確認できます。
+        </p>
 
         <div
           role="region"
@@ -83,113 +144,392 @@ function WeeklyBoardPreview() {
           tabIndex={0}
           className="overflow-x-auto overscroll-x-contain rounded-lg border border-neutral-200 focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-violet-600"
         >
-          {/* SummarySheet と同じ、曜日列内に時刻と長さで予定を配置する方式。 */}
-          <div className="min-w-[640px] text-xs">
-            <div className="grid grid-cols-[40px_repeat(7,minmax(0,1fr))] border-b border-neutral-200 bg-neutral-50 text-center font-semibold text-neutral-600">
-              <div className="py-1 text-[11px]">時刻</div>
-              {DAYS.map((day) => <div key={day} className="border-l border-neutral-200 py-1 text-[11px]">{day}曜</div>)}
-            </div>
-            <div className="grid grid-cols-[40px_repeat(7,minmax(0,1fr))]">
-              <div aria-hidden="true" className="bg-neutral-50/70 font-mono text-[10px] text-neutral-500">
-                {HOURS.map((hour) => (
-                  <div key={hour} style={{ height: ROW_HEIGHT }} className="pr-1 text-right leading-none">
-                    {hour % 3 === 0 ? `${hour}:00` : ""}
-                  </div>
-                ))}
-              </div>
-              {DAYS.map((day, dayIndex) => (
-                <div key={day} role="group" aria-label={`${day}曜日の予定`} className="relative border-l border-neutral-200" style={{ height: HOURS.length * ROW_HEIGHT }}>
-                  {HOURS.map((hour) => (
-                    <div key={hour} aria-hidden="true" style={{ height: ROW_HEIGHT }} className="border-b border-neutral-100 last:border-b-0" />
-                  ))}
-                  {PREVIEW_PLACEMENTS.filter((placement) => placement.day === dayIndex).map((placement) => (
-                    <div
-                      key={`${day}-${placement.startHour}`}
-                      className={`absolute inset-x-px overflow-hidden rounded-md border px-1 leading-tight ${PREVIEW_STYLES[placement.kind].color}`}
-                      style={{ top: (placement.startHour - 6) * ROW_HEIGHT, height: (placement.endHour - placement.startHour) * ROW_HEIGHT }}
-                      title={`${placement.label} ${placement.startHour}:00〜${placement.endHour}:00`}
-                    >
-                      <p className="truncate text-[10px] font-bold leading-tight">{placement.icon ? `${placement.icon} ` : ""}{placement.label}</p>
-                      {(placement.endHour - placement.startHour) >= 2 && (
-                        <p className="text-[9px] font-mono leading-none opacity-80 mt-0.5">{placement.startHour}:00–{placement.endHour}:00</p>
-                      )}
-                    </div>
-                  ))}
+          {/* 本物の週間ボード（WeeklyBoard）と同じ列分割アルゴリズムで配置する。 */}
+          <div className="min-w-[660px] text-xs">
+            <div className="grid grid-cols-[48px_repeat(7,minmax(0,1fr))] border-b border-neutral-200 bg-neutral-50 text-center font-semibold text-neutral-700">
+              <div className="py-1.5 text-[11px] text-neutral-500">時刻</div>
+              {DAYS.map((day) => (
+                <div
+                  key={day}
+                  className="border-l border-neutral-200 py-1.5 text-[11px]"
+                >
+                  {day}曜日
                 </div>
               ))}
             </div>
-            <div aria-hidden="true" className="border-t border-neutral-100 bg-neutral-50/70 py-0.5 pl-1 font-mono text-[10px] text-neutral-500">24:00</div>
+            <div className="grid grid-cols-[48px_repeat(7,minmax(0,1fr))]">
+              <div
+                aria-hidden="true"
+                className="bg-neutral-50/70 font-numeric tabular-nums text-[10px] text-neutral-500"
+              >
+                {HOURS.map((hour) => (
+                  <div
+                    key={hour}
+                    style={{ height: ROW_HEIGHT }}
+                    className="border-b border-neutral-100 pr-1.5 pt-0.5 text-right leading-none last:border-b-0"
+                  >
+                    {hour}:00
+                  </div>
+                ))}
+              </div>
+              {DAYS.map((day, dayIndex) => {
+                const { placements: dayPlacements, columns: columnLayouts } =
+                  dayLayouts[dayIndex];
+                return (
+                  <div
+                    key={day}
+                    role="group"
+                    aria-label={`${day}曜日の予定`}
+                    className="relative border-l border-neutral-200"
+                    style={{ height: HOURS.length * ROW_HEIGHT }}
+                  >
+                    {HOURS.map((hour) => (
+                      <div
+                        key={hour}
+                        aria-hidden="true"
+                        style={{ height: ROW_HEIGHT }}
+                        className="border-b border-neutral-100 last:border-b-0"
+                      />
+                    ))}
+                    <div
+                      className="pointer-events-none absolute inset-0 grid grid-cols-[minmax(0,1fr)]"
+                      style={{
+                        gridTemplateRows: `repeat(${HOURS.length}, ${ROW_HEIGHT}px)`,
+                      }}
+                    >
+                      {dayPlacements.map((placement) => {
+                        const layout = columnLayouts.get(placement.id) ?? {
+                          column: 0,
+                          totalColumns: 1,
+                        };
+                        const isOverlapping = layout.totalColumns > 1;
+                        const widthPct = 100 / layout.totalColumns;
+                        const leftPct = layout.column * widthPct;
+                        const durationHours =
+                          placement.endHour - placement.startHour;
+                        const label = previewLabelFor(placement);
+                        const displayLabel =
+                          isOverlapping && placement.kind === "family"
+                            ? label.replace(/の付き添い$/, "")
+                            : label;
+                        const timeRange = `${placement.startHour}:00〜${placement.endHour}:00`;
+                        const displayTime = isOverlapping
+                          ? `${placement.startHour}〜${placement.endHour}`
+                          : timeRange;
+
+                        return (
+                          <div
+                            key={placement.id}
+                            className="relative grid grid-cols-[minmax(0,1fr)] min-w-0"
+                            style={{
+                              gridRow: `${placement.startHour - 5} / ${placement.endHour - 5}`,
+                              gridColumn: "1",
+                              width: `${widthPct}%`,
+                              marginLeft: `${leftPct}%`,
+                            }}
+                          >
+                            <div
+                              className={`absolute inset-0.5 flex flex-col justify-center overflow-hidden rounded border px-1 shadow-2xs ${PREVIEW_COLORS[placement.kind]}`}
+                              title={`${label} (${timeRange})`}
+                            >
+                              <span className="flex items-center gap-1 text-[11px] font-bold leading-tight">
+                                {!isOverlapping && (
+                                  <PlacementIcon
+                                    kind={placement.kind}
+                                    people={demoFixture.people}
+                                    personId={placement.personId}
+                                  />
+                                )}
+                                <span className="truncate">{displayLabel}</span>
+                              </span>
+                              {durationHours >= 2 && (
+                                <span
+                                  className={`mt-0.5 truncate font-numeric tabular-nums text-[10px] leading-none opacity-90 ${
+                                    isOverlapping ? "-mx-0.5 text-center" : ""
+                                  }`}
+                                >
+                                  {displayTime}
+                                </span>
+                              )}
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+            <div
+              aria-hidden="true"
+              className="grid grid-cols-[48px_repeat(7,minmax(0,1fr))] border-t border-neutral-100 bg-neutral-50/70 font-numeric tabular-nums text-[10px] text-neutral-500"
+            >
+              <div className="py-0.5 pr-1.5 text-right leading-none">24:00</div>
+            </div>
           </div>
         </div>
+        <p className="mt-2 text-[11px] text-neutral-500">
+          {scopeCopy.estimate}
+        </p>
       </div>
     </figure>
   );
 }
 
+function HomeActions() {
+  return (
+    <div className="actions">
+      <DemoCreateButton className="button primary" />
+      <Link className="button" href="/rooms/new">
+        新しくルームを作成
+      </Link>
+    </div>
+  );
+}
+
 export default function HomePage() {
   return (
-    <main className="mobile-page relative isolate min-h-screen bg-gradient-to-b from-violet-50 via-white to-indigo-50/60 px-4 py-4 sm:px-6 sm:py-6 lg:py-6">
-      <div aria-hidden="true" className="pointer-events-none absolute inset-x-0 top-0 -z-10 h-[650px] overflow-hidden">
-        <Image src="/carepact-family-chatgpt.png" alt="" fill priority sizes="100vw" className="object-cover object-top opacity-[0.32]" />
-        <div className="absolute inset-0 bg-gradient-to-b from-violet-50/20 via-white/40 to-white" />
+    <main id="top" className="carepact-home">
+      <HomeSplash />
+      {/* トップ本文を解析する前に判定する。アプリ内遷移時はダイアログのrefで同じ処理を行う。 */}
+      <script dangerouslySetInnerHTML={{
+        __html: `(${openHomeSplash.toString()})(document.currentScript.previousElementSibling)`,
+      }} />
+      <div className="screenbar">
+        <header>
+          <a
+            className="official-logo inline-flex items-center gap-2 text-3xl font-black text-indigo-950"
+            href="#top"
+          >
+            <Logo />
+            CarePact
+          </a>
+          <nav aria-label="ホームページ内の移動">
+            <a href="#vision-title">CarePactについて</a>
+            <a href="#features">できること</a>
+            <a href="#rooms">あなたのルーム</a>
+          </nav>
+        </header>
       </div>
-      <HomeReveal />
-      <div className="relative mx-auto max-w-[1440px]">
-        <div className="grid items-start gap-6 xl:grid-cols-[minmax(0,0.8fr)_minmax(0,1.4fr)] xl:gap-8">
-          <div className="xl:pt-1">
-            <header className="home-intro">
-              <div className="inline-flex items-center gap-2.5">
-                <Logo className="h-9 w-auto shrink-0" />
-                <span className="text-3xl font-extrabold tracking-tight text-indigo-950 sm:text-4xl">CarePact</span>
-              </div>
-              <p className="mt-3 text-xs font-bold tracking-wide text-violet-700 sm:text-sm">予定も費用も、付き添いの分担も。</p>
-              <h1 className="mt-2 text-2xl font-extrabold leading-tight tracking-tight text-indigo-950 sm:text-4xl sm:leading-snug xl:text-[2.25rem]">
-                家族で決める、<br />介護のかたち。
-              </h1>
-              <p className="mt-3 max-w-xl text-sm leading-relaxed text-neutral-700 sm:text-base">
-                誰が、いつ、どんなサービスを使うか。<br className="hidden sm:block" />
-                費用と付き添いの負担を見ながら、<br className="hidden sm:block" />
-                家族の希望をひとつのプランに。<br className="hidden sm:block" />
-                ケアマネへの相談も、まとめシートで。
-              </p>
-            </header>
-
-            <nav aria-label="はじめる" className="home-actions mt-5 grid max-w-xl gap-3 sm:grid-cols-2">
-              <div className="[&>span]:flex [&>span]:flex-col [&>span]:items-stretch [&>span>button]:h-11 [&>span>button]:min-h-11 [&>span>button]:w-full [&>span>button]:rounded-xl [&>span>button]:border-0 [&>span>button]:bg-gradient-to-br [&>span>button]:from-violet-600 [&>span>button]:to-indigo-700 [&>span>button]:px-4 [&>span>button]:py-2.5 [&>span>button]:text-sm [&>span>button]:font-bold [&>span>button]:shadow-sm [&>span>button]:focus-visible:outline-2 [&>span>button]:focus-visible:outline-offset-4 [&>span>button]:focus-visible:outline-violet-600 [&>span>span]:block">
-                <DemoCreateButton />
-              </div>
-              <div>
-                <Link href="/rooms/new" className="flex h-11 min-h-11 items-center justify-center rounded-xl border border-violet-200 bg-white px-4 py-2.5 text-sm font-bold text-indigo-950 shadow-sm hover:border-violet-400 hover:bg-violet-50/50 focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-violet-600">新しくルームを作成</Link>
-              </div>
-            </nav>
-
+      <section className="hero">
+        <Image
+          className="photo"
+          alt=""
+          src="/carepact-family-chatgpt.png"
+          fill
+          sizes="100vw"
+          priority
+        />
+        <div className="veil"></div>
+        <div className="inside">
+          <div className="intro">
+            <p className="eyebrow">予定も費用も、付き添いの分担も。</p>
+            <h1>
+              家族で決める、
+              <br />
+              介護のかたち。
+            </h1>
+            <p>{scopeCopy.purpose}</p>
+            <HomeActions />
             <RecentRoomsList />
           </div>
-
-          <section data-home-reveal aria-labelledby="preview-title" className="home-preview min-w-0">
+          <div className="official-board">
             <WeeklyBoardPreview />
-          </section>
+          </div>
         </div>
-
-        <section data-home-reveal aria-labelledby="steps-title" className="mt-12 sm:mt-16">
-          <h2 id="steps-title" className="text-center text-xl font-bold text-indigo-950 sm:text-2xl">家族の話し合いから、相談まで</h2>
-          <ol className="mt-6 grid gap-4 sm:grid-cols-3 sm:gap-6">
-            {[
-              { title: "家族の事情を入れる", detail: "予定や希望、できることを整理。" },
-              { title: "週間ボードで組む", detail: "サービスと付き添いを組み合わせ。" },
-              { title: "まとめシートでケアマネに相談", detail: "家族で考えたプランを共有。" },
-            ].map((step, index) => (
-              <li key={step.title} className="rounded-2xl border border-violet-100 bg-white p-6 shadow-sm">
-                <div className="flex items-center gap-3">
-                  <span aria-hidden="true" className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-violet-100 text-base font-bold text-violet-700">{index + 1}</span>
-                  <h3 className="text-lg font-bold leading-relaxed text-neutral-800">{step.title}</h3>
+      </section>
+      <section className="vision" aria-labelledby="vision-title">
+        <div className="vision-inner">
+          <h2 id="vision-title">
+            <span>家で暮らしたい。</span>
+            <br />
+            <span>支える家族にも、暮らしがある。</span>
+          </h2>
+          <p>
+            「家で過ごしたい」という本人の願いも、「この時間ならそばにいられる」という家族の事情も、同じように大切です。
+            <br />
+            CarePactは、それぞれの思いを持ち寄って、家族が続けていける介護の形を一緒に考えられるようにしたいと思っています。
+          </p>
+        </div>
+      </section>
+      <section id="features" className="features">
+        <h2>CarePactでできること</h2>
+        <div className="cards">
+          <article>
+            <div className="sample">
+              <div className="sheet">
+                <strong>家族の事情</strong>
+                <div className="line">
+                  <b>対応不可　長女</b>
+                  <br />
+                  月〜金　9:00〜18:00
+                  <br />
+                  平日は仕事のため日中は対応できない
                 </div>
-                <p className="mt-3 text-base leading-relaxed text-neutral-600">{step.detail}</p>
-              </li>
-            ))}
-          </ol>
+              </div>
+            </div>
+            <h3>家族の事情を整理する</h3>
+            <p>
+              本人の希望や、家族が付き添えない時間を、予定を組む前に持ち寄れます。
+            </p>
+          </article>
+          <article>
+            <div className="sample">
+              <div className="sheet">
+                <strong>
+                  <Users className="ui-icon" aria-hidden="true" />{" "}
+                  家族の負担　合計 42 時間
+                </strong>
+                <div className="preview-row">
+                  母<b>12時間／週</b>
+                </div>
+                <div className="preview-row">
+                  長女<b>18時間／週</b>
+                </div>
+                <div className="preview-row">
+                  長男<b>12時間／週</b>
+                </div>
+              </div>
+            </div>
+            <h3>予定・費用・分担を見比べる</h3>
+            <p>
+              予定を組み替えながら、月の費用と、一人ひとりの付き添い時間を確かめられます。
+            </p>
+          </article>
+          <article>
+            <div className="sample">
+              <div className="sheet">
+                <strong>
+                  <CalendarDays className="ui-icon" aria-hidden="true" /> 2.
+                  家族で考えた1週間の予定
+                </strong>
+                <div className="week-fragment">
+                  <b>時刻</b>
+                  <b>月曜</b>
+                  <span>7:00</span>
+                  <span className="visit-slot">
+                    訪問介護（身体介護）
+                    <br />
+                    7:00〜9:00
+                  </span>
+                </div>
+              </div>
+            </div>
+            <h3>ケアマネへの相談に持ち出す</h3>
+            <p>
+              週間予定と家族の分担を一枚にまとめて、面談で相談したいことを伝えられます。
+            </p>
+          </article>
+        </div>
+      </section>
+      <div className="stories">
+        <section className="story">
+          <div>
+            <h2>
+              家族のメモから、
+              <br />
+              希望と条件を整理する。
+            </h2>
+            <p>
+              仕事がある時間、本人が大切にしたいこと。家族のメモをAIが整理し、読み取った内容を家族が確かめてから予定づくりに進めます。
+            </p>
+          </div>
+          <div className="example">
+            <div className="piece">
+              <strong>長女のメモ</strong>
+              <blockquote className="excerpt">
+                「私は平日9時から18時まで仕事があり、日中は父のそばにいられません。」
+              </blockquote>
+            </div>
+            <div className="piece">
+              <strong>Geminiの整理</strong>
+              <dl>
+                <dt>対応不可</dt>
+                <dd>長女 · 月〜金 9:00〜18:00</dd>
+              </dl>
+            </div>
+          </div>
+        </section>
+        <section className="story">
+          <div>
+            <h2>
+              付き添いが足りない時間を、
+              <br />
+              週間ボードで見つける。
+            </h2>
+            <p>
+              設定した「支援が必要な時間帯」と予定を照らし合わせ、手が足りない時間を見つけます。佐藤家の例では、通所介護が終わる正午からの2時間が、次の相談のきっかけになります。
+            </p>
+          </div>
+          <div className="example warm">
+            <div className="piece">
+              <strong>水曜日</strong>
+              <div className="day-fragment">
+                <div>
+                  <Bus className="ui-icon" aria-hidden="true" /> 通所介護
+                  <br />
+                  9:00〜12:00
+                </div>
+                <div>
+                  <TriangleAlert className="ui-icon" aria-hidden="true" />{" "}
+                  介護が必要
+                  <br />
+                  12:00〜14:00
+                </div>
+              </div>
+            </div>
+          </div>
+        </section>
+        <section className="story">
+          <div>
+            <h2>
+              代替案を選ぶ前に、
+              <br />
+              費用と分担を比べる。
+            </h2>
+            <p>
+              佐藤家の代替案では、水曜の通所介護を延ばし、火曜・木曜の通所リハを短縮。土曜の午前は長男が付き添います。家族は採用する前に、変更後の見込みを比べられます。
+            </p>
+          </div>
+          <div className="example">
+            <div className="piece">
+              <strong>変更の要約</strong>
+              <div>今のプラン → この代替案</div>
+              <div className="preview-row">
+                <span>月換算単位</span>
+                <span>
+                  28,131単位 → <b>24,094単位</b>
+                </span>
+              </div>
+              <div className="preview-row">
+                <span>月次自己負担（概算）</span>
+                <span>
+                  37,878円 → <b>24,094円</b>
+                </span>
+              </div>
+              <div className="preview-row">
+                <span>長女の付き添い</span>
+                <span>
+                  27時間/週 → <b>18時間/週</b>
+                </span>
+              </div>
+            </div>
+            <small>
+              要介護3・自己負担1割の例。{scopeCopy.estimate}
+            </small>
+          </div>
         </section>
       </div>
+      <section className="closing-cta" aria-labelledby="closing-title">
+        <h2 id="closing-title">
+          <span className="closing-brand">
+            <Logo />
+            CarePact
+          </span>
+        </h2>
+        <p className="closing-message">介護の予定を、家族で組んでみよう。</p>
+        <HomeActions />
+      </section>
     </main>
   );
 }
