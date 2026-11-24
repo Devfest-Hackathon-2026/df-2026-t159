@@ -17,13 +17,17 @@
  * - 代替案はカード（要約、変更件数、採用ボタン）で表示する
  */
 
+import { ClipboardList, Lightbulb } from "lucide-react";
+import { scopeCopy } from "@/lib/scope-copy";
 import Link from "next/link";
 import { useId, useState } from "react";
 import { ConfirmPlanButton, ConfirmationBlockers } from "./ConfirmationControls";
 import { applyChanges } from "@/lib/apply-changes";
+import { evaluateHopeAlignment } from "@/lib/hope-alignment";
 import type { PlanActionsProps, Proposal } from "@/lib/types";
 import ProposalChangeList from "./ProposalChangeList";
 import ProposalChangeSummary from "./ProposalChangeSummary";
+import ProposalHopeReference from "./ProposalHopeReference";
 import ProposalMiniBoard from "./ProposalMiniBoard";
 
 /**
@@ -107,7 +111,7 @@ export default function PlanActions({
       <div className="rounded-xl border border-neutral-200 bg-white p-6 shadow-sm">
         <div className="flex flex-wrap items-center justify-between gap-3 border-b border-neutral-100 pb-4">
           <div className="flex items-center gap-2">
-            <span className="text-lg">📋</span>
+            <span className="text-lg"><ClipboardList className="ui-icon" aria-hidden="true" /></span>
             <h2 className="text-base font-bold text-neutral-900">プランの確定</h2>
           </div>
           {confirmed ? (
@@ -126,7 +130,7 @@ export default function PlanActions({
           {confirmed ? (
             <div className="space-y-4">
               <p className="text-sm text-neutral-600 leading-relaxed">
-                確定済みです。まとめシートで確認・印刷できます。
+                {scopeCopy.confirmedMeaning}
               </p>
               <div>
                 <Link
@@ -156,10 +160,10 @@ export default function PlanActions({
 
       {/* 代替案カード一覧 */}
       {proposals.length > 0 && (
-        <div className="space-y-3">
+        <div data-proposals-results="" className="space-y-3 scroll-mt-16">
           <div className="max-sm:flex-wrap max-sm:gap-2 flex items-center justify-between">
             <h3 className="text-base font-bold text-neutral-900 flex items-center gap-2">
-              <span>💡</span>
+              <span><Lightbulb className="ui-icon" aria-hidden="true" /></span>
               <span>提示された代替案（{proposals.length}件）</span>
             </h3>
             <span className="text-xs text-neutral-500">
@@ -224,6 +228,13 @@ function ProposalCard({
   const appliedPlacements = !stale
     ? applyChanges(snapshot.placements, proposal.changes)
     : [];
+  const hopeAlignment = !stale
+    ? evaluateHopeAlignment({
+        people: snapshot.people,
+        constraints: snapshot.constraints,
+        placements: appliedPlacements,
+      })
+    : null;
 
   return (
     <li
@@ -247,7 +258,7 @@ function ProposalCard({
             </span>
             {stale && (
               <span className="text-red-600">
-                ※ 古い版への提案のため適用できません
+                ※ 変更前のプランへの提案のため適用できません
               </span>
             )}
           </div>
@@ -255,6 +266,7 @@ function ProposalCard({
 
         <button
           type="button"
+          data-proposals-tutorial-target={index === 0 ? "proposal-apply" : undefined}
           disabled={!canEdit || busy || stale}
           onClick={() => onApply(proposal)}
           className="rounded-xl bg-neutral-900 px-4 py-2 text-xs sm:text-sm font-bold text-white shadow-xs hover:bg-neutral-800 disabled:cursor-not-allowed disabled:bg-neutral-300 transition-colors shrink-0"
@@ -264,37 +276,43 @@ function ProposalCard({
       </div>
 
       {!stale && (
-        <div className="mt-5 space-y-4 border-t border-neutral-100 pt-4">
-          {/* 2. 変更の一覧 */}
-          <details className="rounded-lg border border-neutral-200 bg-neutral-50 p-3">
-            <summary className="min-h-11 cursor-pointer content-center text-sm font-bold">
-              変更の詳細（{proposal.changes.length}件）
-            </summary>
-            <ProposalChangeList
-              changes={proposal.changes}
-              placements={snapshot.placements}
-              people={snapshot.people}
-              selectedChangeId={selectedChangeId}
-              onSelectChange={setSelectedChangeId}
-            />
-          </details>
-
-          {/* 3. ミニボード */}
-          <ProposalMiniBoard
-            placements={appliedPlacements}
-            people={snapshot.people}
-            originalPlacements={snapshot.placements}
-            changes={proposal.changes}
-            highlightedPlacementId={selectedChangeId}
-            onSelectPlacement={setSelectedChangeId}
-          />
-
-          {/* 4. 変更の要約 */}
+        <div
+          data-proposals-tutorial-target={index === 0 ? "proposal-card" : undefined}
+          className="mt-5 space-y-4 border-t border-neutral-100 pt-4"
+        >
+          {/* 2. 変更の要約（単位数・自己負担・家族の負担の変化） */}
           <ProposalChangeSummary
             people={snapshot.people}
             current={validation}
             proposed={proposal.validation}
           />
+
+          {/* 3. 参考：希望への沿い具合 */}
+          {hopeAlignment && <ProposalHopeReference alignment={hopeAlignment} />}
+
+          {/* 4. 変更の内訳（初期は閉じる） */}
+          <details className="rounded-lg border border-neutral-200 bg-neutral-50 p-3">
+            <summary className="min-h-11 cursor-pointer content-center text-sm font-bold text-neutral-800">
+              変更の内訳を見る（{proposal.changes.length}件）
+            </summary>
+            <div className="mt-3 space-y-4">
+              <ProposalChangeList
+                changes={proposal.changes}
+                placements={snapshot.placements}
+                people={snapshot.people}
+                selectedChangeId={selectedChangeId}
+                onSelectChange={setSelectedChangeId}
+              />
+              <ProposalMiniBoard
+                placements={appliedPlacements}
+                people={snapshot.people}
+                originalPlacements={snapshot.placements}
+                changes={proposal.changes}
+                highlightedPlacementId={selectedChangeId}
+                onSelectPlacement={setSelectedChangeId}
+              />
+            </div>
+          </details>
 
           <div className="flex justify-end pt-2">
             <button

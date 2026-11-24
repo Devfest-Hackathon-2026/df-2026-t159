@@ -1,15 +1,24 @@
 // @vitest-environment jsdom
 import React from "react";
-import { cleanup, fireEvent, render, screen, within } from "@testing-library/react";
+import { cleanup, render, screen, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import BoardRightRail from "../app/rooms/[roomId]/board/BoardRightRail";
+import BoardStatusBand from "../app/rooms/[roomId]/board/BoardStatusBand";
 import ProposalsClient from "../app/rooms/[roomId]/proposals/ProposalsClient";
 import { demoFixture as fixture } from "../lib/demo-fixture";
 import type { RoomSnapshot, ValidationResult } from "../lib/types";
 
 vi.mock("@/lib/auth", () => {
   const user = { uid: "test-user" };
-  return { useAnonymousUser: () => user, getIdToken: vi.fn() };
+  return {
+    useAnonymousUser: () => user,
+    useAnonymousAuth: () => ({
+      user,
+      loading: false,
+      error: null,
+      retry: vi.fn(),
+    }),
+    getIdToken: vi.fn(),
+  };
 });
 vi.mock("@/lib/firebase", () => ({ db: {} }));
 vi.mock("firebase/firestore", () => ({
@@ -34,7 +43,7 @@ const snapshot: RoomSnapshot = {
   copayRate: fixture.copayRate,
   revision: 1,
 };
-const headings = ["介護保険の上限", "空白（介護が必要な時間の空き）", "付き添いの負担", "ルール違反"];
+const headings = ["介護保険の上限", "空白（介護が必要な時間の空き）", "付き添いの負担", "確認が必要な予定"];
 let validation: ValidationResult;
 
 beforeEach(() => {
@@ -46,40 +55,44 @@ beforeEach(() => {
 });
 afterEach(cleanup);
 
-function renderRail() {
-  render(<BoardRightRail roomId="test" snapshot={snapshot} validation={validation} people={fixture.people} />);
-  return within(screen.getByRole("region", { name: "警告一覧" }));
+function renderBand() {
+  render(<BoardStatusBand roomId="test" snapshot={snapshot} validation={validation} people={fixture.people} />);
+  return within(screen.getByRole("region", { name: "プランの状態" }));
 }
 
 describe("検証詳細の種類別表示", () => {
-  it("ボードの要約は同じ件数・重要度順のまま、展開した詳細だけ4分類する", () => {
-    const warnings = renderRail();
-    expect(warnings.getByText("問題 5件")).toBeTruthy();
-    expect(warnings.getByRole("button", { name: /全5件/ })).toBeTruthy();
-    expect(warnings.queryByRole("heading", { level: 3 })).toBeNull();
-    expect(warnings.getByText("対応できない時間との重なり")).toBeTruthy();
-    expect(warnings.queryByText(/保険の上限超過/)).toBeNull();
-
-    fireEvent.click(warnings.getByRole("button", { name: /詳しく見る/ }));
-    expect(warnings.getAllByRole("heading", { level: 3 }).map(e => e.textContent)).toEqual(headings);
-    const rules = within(warnings.getByRole("region", { name: "ルール違反" }));
+  it("ボードの帯は注意点件数だけ表示し、重複しない違反の内容を表示する", () => {
+    const band = renderBand();
+    expect(band.queryByText("注意点 5件")).toBeNull();
+    const rules = within(band.getByRole("region", { name: "確認が必要な予定" }));
+    expect(rules.getByText("対応不可との重なり")).toBeTruthy();
+    expect(rules.getByText("付き添い時間の重なり")).toBeTruthy();
     expect(rules.getByText("架空の対応不可時間の違反")).toBeTruthy();
     expect(rules.getByText("架空の付き添い重複")).toBeTruthy();
-    expect(rules.getAllByText("家族が対応できる曜日・時間に予定を変えてください。")).toHaveLength(2);
-    expect(warnings.getByText("問題 5件")).toBeTruthy();
-    fireEvent.click(warnings.getByRole("button", { name: /閉じる/ }));
-    expect(warnings.queryByRole("heading", { level: 3 })).toBeNull();
-    expect(warnings.getByRole("button", { name: /全5件/ })).toBeTruthy();
+    expect(band.queryByText(/解消のヒント/)).toBeNull();
+  });
+
+  it.each([
+    ["予定が重なっています（月曜 9:00〜12:00 通所介護 と 月曜 10:00〜11:00 訪問介護）", "予定の重なり"],
+    ["同じ人の付き添いが重なっています（火曜 17:00〜19:00 長女の付き添い と 火曜 18:00〜20:00 長女の付き添い）", "付き添い時間の重なり"],
+    ["予定が重なっています（水曜 9:00〜16:00 通所介護 と 水曜 10:00〜12:00 母の付き添い）", "予定の重なり"],
+  ] as const)("ボードでは見出しと短い1行のみを表示し長い補足説明を出さない：%s", (detail, expectedTitle) => {
+    validation.hardViolations = [{ type: "overlap", detail }];
+    const band = renderBand();
+    const rules = within(band.getByRole("region", { name: "確認が必要な予定" }));
+    expect(rules.getByText(expectedTitle)).toBeTruthy();
+    expect(rules.getByText(detail)).toBeTruthy();
+    expect(rules.queryByText(/同じ時間に置くと、重なりとして警告します/)).toBeNull();
+    expect(rules.queryByText(/解消のヒント/)).toBeNull();
   });
 
   it("ボードは該当のない分類を表示しない", () => {
     validation.overUnits = 0;
     validation.overloads = [];
     validation.hardViolations = [];
-    const warnings = renderRail();
-    fireEvent.click(warnings.getByRole("button", { name: /詳しく見る/ }));
-    expect(warnings.getAllByRole("heading", { level: 3 }).map(e => e.textContent)).toEqual([headings[1]]);
-    expect(warnings.getByText("問題 1件")).toBeTruthy();
+    const band = renderBand();
+    expect(band.queryByRole("region", { name: headings[1] })).toBeNull();
+    expect(band.queryByText("注意点 1件")).toBeNull();
   });
 
   it("代替案でも元の注意点を4分類し、同分類の複数違反と件数を保つ", async () => {
@@ -102,8 +115,8 @@ describe("検証詳細の種類別表示", () => {
     expect(overloadDetails.getByText(/付き添いの負担集中/)).toBeTruthy();
     expect(overloadDetails.getByText(/長女 27時間／週/)).toBeTruthy();
 
-    // ルール違反カードが常時表示
-    const rules = within(screen.getByRole("region", { name: "ルール違反" }));
+    // 確認が必要な予定カードが常時表示
+    const rules = within(screen.getByRole("region", { name: "確認が必要な予定" }));
     expect(rules.getByText(/架空の対応不可時間の違反/)).toBeTruthy();
     expect(rules.getByText(/架空の付き添い重複/)).toBeTruthy();
   });
@@ -115,7 +128,7 @@ describe("検証詳細の種類別表示", () => {
     render(<ProposalsClient roomId="test" />);
     await screen.findByRole("heading", { name: "現在のプランの状態" });
     expect(screen.getByText("2 件の注意点があります")).toBeTruthy();
-    expect(screen.getByRole("region", { name: "ルール違反" })).toBeTruthy();
+    expect(screen.getByRole("region", { name: "確認が必要な予定" })).toBeTruthy();
     expect(screen.queryByRole("region", { name: "介護保険の上限" })).toBeNull();
     expect(screen.queryByRole("region", { name: "空白（介護が必要な時間の空き）" })).toBeNull();
     expect(screen.queryByRole("region", { name: "付き添いの負担" })).toBeNull();
@@ -125,22 +138,21 @@ describe("検証詳細の種類別表示", () => {
     validation = structuredClone(fixture.acceptedPlan.expectedValidationResult);
     render(<ProposalsClient roomId="test" />);
     await screen.findByRole("heading", { name: "現在のプランの状態" });
-    expect(screen.getByText("問題なし（基準を満たしています）")).toBeTruthy();
-    expect(screen.getByText("問題なし（確定できます）")).toBeTruthy();
+    expect(screen.getByText("予定と費用の自動チェックを通過しました")).toBeTruthy();
+    expect(screen.getByText("相談用に確定できます")).toBeTruthy();
     expect(screen.queryByRole("region", { name: "介護保険の上限" })).toBeNull();
     expect(screen.queryByRole("region", { name: "空白（介護が必要な時間の空き）" })).toBeNull();
     expect(screen.queryByRole("region", { name: "付き添いの負担" })).toBeNull();
-    expect(screen.queryByRole("region", { name: "ルール違反" })).toBeNull();
+    expect(screen.queryByRole("region", { name: "確認が必要な予定" })).toBeNull();
   });
 
-  it("ボードの未判定は4分類の後に別枠で残し、要約件数にも含める", () => {
+  it("ボードの未判定は別枠で残し、要約件数にも含める", () => {
     validation.validationErrors = [{ code: "missingCareWindows", reason: "支援必要時間が未設定です。" }];
-    const warnings = renderRail();
-    expect(warnings.getByText("問題 6件")).toBeTruthy();
-    fireEvent.click(warnings.getByRole("button", { name: /詳しく見る/ }));
-    expect(warnings.getAllByRole("heading", { level: 3 }).map(e => e.textContent)).toEqual([...headings, "未判定・不備"]);
-    expect(within(warnings.getByRole("region", { name: "未判定・不備" })).getByText("支援必要時間が未設定です。")).toBeTruthy();
-    expect(within(warnings.getByRole("region", { name: "ルール違反" })).queryByText("支援必要時間が未設定です。")).toBeNull();
+    const band = renderBand();
+    expect(band.queryByText("注意点 6件")).toBeNull();
+    expect(band.getByRole("heading", { name: "未判定・不備" })).toBeTruthy();
+    expect(within(band.getByRole("region", { name: "未判定・不備" })).getByText("支援必要時間が未設定です。")).toBeTruthy();
+    expect(within(band.getByRole("region", { name: "確認が必要な予定" })).queryByText("支援必要時間が未設定です。")).toBeNull();
   });
 
   it("代替案の未判定も最後の別枠で表示し、違反に混ぜない", async () => {
@@ -152,7 +164,7 @@ describe("検証詳細の種類別表示", () => {
     expect(unavailCard).toBeTruthy();
     const details = within(unavailCard);
     expect(details.getByText("時間区分を判定できません。")).toBeTruthy();
-    expect(within(screen.getByRole("region", { name: "ルール違反" })).queryByText("時間区分を判定できません。")).toBeNull();
+    expect(within(screen.getByRole("region", { name: "確認が必要な予定" })).queryByText("時間区分を判定できません。")).toBeNull();
   });
 
   it("未判定だけの場合も、空の4分類は出さず理由を残す", async () => {
@@ -166,6 +178,6 @@ describe("検証詳細の種類別表示", () => {
     expect(unavailCard).toBeTruthy();
     expect(within(unavailCard).getByText("単位数マスターを確認してください。")).toBeTruthy();
     expect(screen.queryByRole("region", { name: "介護保険の上限" })).toBeNull();
-    expect(screen.queryByRole("region", { name: "ルール違反" })).toBeNull();
+    expect(screen.queryByRole("region", { name: "確認が必要な予定" })).toBeNull();
   });
 });

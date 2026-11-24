@@ -14,16 +14,28 @@
  * - PDF 生成・ケアマネ側編集機能は行わない
  */
 
+import { CalendarDays, CircleCheck, ClipboardList, Info, Printer, Scale, TriangleAlert } from "lucide-react";
+import { scopeCopy } from "@/lib/scope-copy";
+import DemoSummaryTutorial from "@/components/DemoSummaryTutorial";
+import Logo from "@/components/Logo";
+import { roomDisplayName } from "@/lib/room-name";
 import Link from "next/link";
-import { DAYS, HOURS } from "@/lib/board";
+import { DAYS, HOURS, KIND_LABELS } from "@/lib/board";
+import { getCheckNoteItems } from "@/lib/check-notes";
 import {
   SUMMARY_DISCLAIMER_NOTE,
   formatConstraints,
   formatSummaryBurden,
   isSummaryConfirmed,
 } from "@/lib/summary-sheet";
-import type { Person, Placement, PlacementKind, SummaryDoc } from "@/lib/types";
-import { getServiceMaster, unitsMaster } from "@/lib/units";
+import type {
+  Person,
+  Placement,
+  PlacementKind,
+  RoomSnapshot,
+  SummaryDoc,
+  ValidationResult,
+} from "@/lib/types";
 
 const CALENDAR_COLORS: Record<PlacementKind, string> = {
   visit: "bg-sky-100 border-sky-300 text-sky-950",
@@ -31,14 +43,6 @@ const CALENDAR_COLORS: Record<PlacementKind, string> = {
   dayrehab: "bg-fuchsia-200 border-fuchsia-400 text-fuchsia-950",
   shortstay: "bg-violet-100 border-violet-300 text-violet-950",
   family: "bg-amber-100 border-amber-300 text-amber-950",
-};
-
-const KIND_DISPLAY_LABELS: Record<PlacementKind, string> = {
-  visit: "訪問介護",
-  daycare: "通所介護",
-  dayrehab: "デイケア",
-  shortstay: "ショートステイ",
-  family: "家族付き添い",
 };
 
 function getPlacementDisplayInfo(
@@ -49,17 +53,25 @@ function getPlacementDisplayInfo(
   if (placement.kind === "family") {
     const person = people.find((p) => p.id === placement.personId);
     return {
-      title: person ? `${person.name}（付き添い）` : "家族の付き添い",
+      title: person ? `${person.name}（付き添い）` : KIND_LABELS.family,
       timeRange,
     };
   }
-  const master = placement.serviceId
-    ? getServiceMaster(unitsMaster, placement.serviceId)
-    : unitsMaster.find((u) => u.kind === placement.kind);
+  if (placement.serviceId === "visit-body") {
+    return { title: "訪問介護（身体）", timeRange };
+  }
+  if (placement.serviceId === "visit-life") {
+    return { title: "訪問介護（生活）", timeRange };
+  }
   return {
-    title: master?.name ?? KIND_DISPLAY_LABELS[placement.kind] ?? "サービス",
+    title: KIND_LABELS[placement.kind] ?? "サービス",
     timeRange,
   };
+}
+
+export interface SummarySheetDraft {
+  snapshot: RoomSnapshot;
+  validation: ValidationResult;
 }
 
 export interface SummarySheetProps {
@@ -67,18 +79,38 @@ export interface SummarySheetProps {
   summary: SummaryDoc | null;
   /** 現在のルームから読むのは確定状態照合用の版番号だけ。 */
   currentRevision: number | null;
+  /** 未確定時に現在のルーム内容（スナップショット＋検証結果）を相談用下書きとして表示するためのデータ。 */
+  draft?: SummarySheetDraft | null;
   roomName?: string;
+  isDemo?: boolean;
+  showDemoTutorial?: boolean;
 }
 
 export default function SummarySheet({
   roomId,
   summary,
   currentRevision,
+  draft = null,
   roomName,
+  isDemo = false,
+  showDemoTutorial = false,
 }: SummarySheetProps) {
   const confirmed = isSummaryConfirmed(summary, currentRevision);
+  const activeDraft = !confirmed && draft ? draft : null;
 
-  if (!summary) return <main className="mx-auto max-w-3xl p-6">
+  // 確定済みは凍結スナップショット、未確定で下書きが渡された場合は現在入力を表示する。
+  const activeSnapshot = confirmed
+    ? summary!.snapshot
+    : activeDraft
+      ? activeDraft.snapshot
+      : summary?.snapshot ?? null;
+  const activeValidation = confirmed
+    ? summary!.validation
+    : activeDraft
+      ? activeDraft.validation
+      : summary?.validation ?? null;
+
+  if (!activeSnapshot) return <main className="mx-auto max-w-3xl p-6">
     <h1 className="text-2xl font-bold">ケアマネ面談用 まとめシート</h1>
     <p role="status" className="my-4">未確定：確定した内容がありません。週間ボードでプランを確定してください。</p>
     <Link className="inline-flex items-center gap-2 rounded-xl bg-indigo-600 px-5 py-2.5 text-sm font-bold text-white shadow-xs hover:bg-indigo-700" href={`/rooms/${roomId}/board`}>
@@ -87,17 +119,28 @@ export default function SummarySheet({
     </Link>
   </main>;
 
-  // 表示内容は、現在の入力ではなく保存された確定スナップショットだけ。
-  const activeSnapshot = summary.snapshot;
-  const activeValidation = summary.validation;
-
-  const people = activeSnapshot?.people ?? [];
-  const placements = activeSnapshot?.placements ?? [];
-  const constraints = activeSnapshot?.constraints ?? [];
-  const hopes = activeSnapshot?.hopes ?? [];
-  const unknowns = activeSnapshot?.unknowns ?? [];
+  const people = activeSnapshot.people ?? [];
+  const placements = activeSnapshot.placements ?? [];
+  const constraints = activeSnapshot.constraints ?? [];
+  const hopes = activeSnapshot.hopes ?? [];
+  const unknowns = activeSnapshot.unknowns ?? [];
 
   const formattedConstraints = formatConstraints(constraints, people);
+  const checkNotes = getCheckNoteItems(placements);
+  const motherPlacement = placements.find((placement) =>
+    placement.kind === "family" && people.some((person) =>
+      person.id === placement.personId && person.name.trim() === "母",
+    ),
+  );
+  if (motherPlacement) {
+    checkNotes.push({
+      id: "mother-care",
+      placementId: motherPlacement.id,
+      kind: "family",
+      title: "母が担当する介助",
+      text: "母が予定している介助を無理なく担えるか、ケアマネに相談しましょう。",
+    });
+  }
   const burden = activeValidation
     ? formatSummaryBurden(activeValidation, people)
     : null;
@@ -106,6 +149,20 @@ export default function SummarySheet({
     // Safari でもタップによる操作として扱われるよう、非同期処理を挟まない。
     window.print();
   };
+
+  const printButton = (tutorialTarget?: string) => (
+    <button
+      type="button"
+      onClick={handlePrint}
+      data-tutorial-target={tutorialTarget}
+      aria-describedby="summary-print-help"
+      className="relative z-10 flex min-h-[44px] min-w-[140px] items-center justify-center gap-2 rounded-xl bg-indigo-600 px-6 py-2.5 text-sm font-bold text-white shadow-xs hover:bg-indigo-700 active:bg-indigo-800 transition-colors touch-manipulation cursor-pointer select-none"
+      style={{ touchAction: "manipulation" }}
+    >
+      <span className="text-base" aria-hidden="true"><Printer className="ui-icon" aria-hidden="true" /></span>
+      <span>印刷する</span>
+    </button>
+  );
 
   return (
     <div className="max-sm:px-0 summary-sheet-root mx-auto max-w-4xl px-4 py-8 print:p-0 print:max-w-none">
@@ -118,17 +175,11 @@ export default function SummarySheet({
           <span aria-hidden="true">←</span>
           <span>週間ボードで確認する</span>
         </Link>
+        {isDemo && showDemoTutorial && (
+          <DemoSummaryTutorial key={roomId} roomId={roomId} hasQuestions={checkNotes.length > 0} />
+        )}
         <div className="flex flex-col items-end gap-1.5">
-          <button
-            type="button"
-            onClick={handlePrint}
-            aria-describedby="summary-print-help"
-            className="relative z-10 flex min-h-[44px] min-w-[140px] items-center justify-center gap-2 rounded-xl bg-indigo-600 px-6 py-2.5 text-sm font-bold text-white shadow-xs hover:bg-indigo-700 active:bg-indigo-800 transition-colors touch-manipulation cursor-pointer select-none"
-            style={{ touchAction: "manipulation" }}
-          >
-            <span className="text-base" aria-hidden="true">🖨️</span>
-            <span>印刷する</span>
-          </button>
+          {printButton()}
           <p id="summary-print-help" className="text-[11px] text-neutral-500">
             ※ 印刷できない場合はブラウザのメニューから印刷してください
           </p>
@@ -143,12 +194,36 @@ export default function SummarySheet({
             className="max-sm:flex-wrap max-sm:gap-2 flex items-center justify-between rounded-md border border-emerald-300 bg-emerald-50 px-4 py-2.5 text-emerald-900 print:border-emerald-700 print:bg-white"
           >
             <div className="max-sm:flex-wrap flex items-center gap-2">
-              <span className="font-bold text-emerald-800">✅ 確定済みプラン</span>
-              <span className="text-xs text-emerald-700">
-                （確定版: {summary?.confirmedRevision}）
-              </span>
+              <span className="font-bold text-emerald-800"><CircleCheck className="ui-icon" aria-hidden="true" /> 相談用に保存した案</span>
             </div>
             <span className="text-xs text-emerald-700">ケアマネ面談用</span>
+          </div>
+        ) : activeDraft ? (
+          <div
+            role="alert"
+            className="rounded-md border border-amber-300 bg-amber-50 px-4 py-3 text-amber-950 print:border-amber-700 print:bg-white"
+          >
+            <div className="max-sm:flex-wrap flex items-center gap-2 font-bold text-amber-900">
+              <span aria-hidden="true"><TriangleAlert className="ui-icon" aria-hidden="true" /></span>
+              <span>相談用下書き（未確定プラン）</span>
+            </div>
+            <p className="mt-1 text-xs text-amber-800">
+              {summary
+                ? "現在のルーム内容をもとにした相談用下書きです（確定後に内容が変更されています）。まだ確定していません。"
+                : "現在のルーム内容をもとにした相談用下書きです。まだ確定していません。"}
+            </p>
+            <p className="mt-1 text-xs font-medium text-amber-900">
+              {scopeCopy.draftSummary}
+            </p>
+            <div className="mt-3 print:hidden">
+              <Link
+                href={`/rooms/${roomId}/board`}
+                className="inline-flex items-center gap-1.5 rounded-lg bg-amber-100 px-3 py-1.5 text-xs font-bold text-amber-900 hover:bg-amber-200 transition-colors"
+              >
+                <span>週間ボードで確認・確定する</span>
+                <span aria-hidden="true">→</span>
+              </Link>
+            </div>
           </div>
         ) : (
           <div
@@ -156,13 +231,13 @@ export default function SummarySheet({
             className="rounded-md border border-amber-300 bg-amber-50 px-4 py-3 text-amber-950 print:border-amber-700 print:bg-white"
           >
             <div className="max-sm:flex-wrap flex items-center gap-2 font-bold text-amber-900">
-              <span aria-hidden="true">⚠️</span>
+              <span aria-hidden="true"><TriangleAlert className="ui-icon" aria-hidden="true" /></span>
               <span>未確定プラン</span>
             </div>
             <p className="mt-1 text-xs text-amber-800">
               {currentRevision === null
-                ? "現在の入力の版が分からないため、確定状態は未判定です。以前に確定した内容を表示しています。"
-                : `現在の入力は未確定です（保存時の版: ${summary.confirmedRevision} ／ 現在の版: ${currentRevision}）。以前に確定した内容を表示しています。面談前に週間ボードで確定し直してください。`}
+                ? "最新の入力状態を取得できないため、確定状態は未判定です。以前に確定した内容を表示しています。"
+                : "確定後に内容が変更されているため、現在の入力は未確定です。以前に確定した内容を表示しています。面談前に週間ボードで確定し直してください。"}
             </p>
             <div className="mt-3 print:hidden">
               <Link
@@ -178,33 +253,48 @@ export default function SummarySheet({
       </div>
 
       {/* シート本文（印刷対象） */}
-      <article className="max-sm:p-4 sheet-paper rounded-lg border border-neutral-200 bg-white p-8 shadow-sm print:border-none print:p-0 print:shadow-none space-y-6">
+      <article className="max-sm:p-4 sheet-paper rounded-lg border border-neutral-200 bg-white p-8 shadow-sm print:border-none print:p-0 print:shadow-none print:font-sans space-y-6">
         {/* ヘッダー情報 */}
-        <header className="border-b-2 border-neutral-900 pb-4">
+        <header data-tutorial-target="summary-overview" className="border-b-2 border-neutral-900 pb-4">
           <div className="flex flex-wrap items-baseline justify-between gap-2">
-            <h1 className="text-2xl font-black tracking-tight text-neutral-900">
-              ケアマネ面談用 まとめシート
-            </h1>
-            <div className="text-right text-xs text-neutral-500">
-              <p className="font-bold text-neutral-800">{roomName ?? "佐藤家のケア会議"}</p>
-              <p>
-                状態:{" "}
-                <span className={`font-bold ${confirmed ? "text-emerald-700" : "text-amber-700"}`}>
-                  {confirmed ? "確定済み" : "現在は未確定（掲載内容は以前の確定版）"}
+            <div className="flex flex-wrap items-center gap-2">
+              <span className="official-logo hidden items-center gap-2.5 text-base font-black text-neutral-900 print:inline-flex">
+                <Logo className="h-6 w-auto shrink-0" />
+                CarePact
+              </span>
+              <h1 className="text-2xl font-black tracking-tight text-neutral-900">
+                ケアマネ面談用 まとめシート
+              </h1>
+              {activeDraft && (
+                <span className="inline-flex items-center rounded border border-amber-600 bg-amber-100 px-2 py-0.5 text-xs font-bold text-amber-950 print:border-black print:bg-white print:text-black">
+                  相談用下書き（未確定）
                 </span>
-                {`（掲載版: ${summary.confirmedRevision}）`}
-              </p>
+              )}
+            </div>
+            <div className="text-right text-xs text-neutral-500">
+              <p className="font-bold text-neutral-800">{roomName ?? roomDisplayName(activeSnapshot.people, isDemo)}</p>
+              {!activeDraft && (
+                <p>
+                  状態:{" "}
+                  <span className={`font-bold ${confirmed ? "text-emerald-700" : "text-amber-700"}`}>
+                    {confirmed ? "確定済み" : "現在は未確定"}
+                  </span>
+                </p>
+              )}
             </div>
           </div>
+          {!activeDraft && (
+            <p className="mt-1 text-xs text-neutral-600">{scopeCopy.confirmedMeaning}</p>
+          )}
           <p className="mt-1 text-xs text-neutral-600">
-            ケアマネジャーとの面談用資料です。
+            {scopeCopy.consultation}
           </p>
         </header>
 
         {/* 1. 家族の希望と制約 */}
-        <section className="sheet-section break-inside-avoid">
+        <section data-tutorial-target="summary-family" className="sheet-section break-inside-avoid">
           <h2 className="text-base font-bold text-neutral-900 border-b border-neutral-300 pb-1.5 flex items-center gap-1.5">
-            <span>📋</span>
+            <span><ClipboardList className="ui-icon" aria-hidden="true" /></span>
             <span>1. 家族の希望と事情</span>
           </h2>
 
@@ -263,24 +353,24 @@ export default function SummarySheet({
         <section className="sheet-section schedule-section break-inside-avoid">
           <div className="flex flex-wrap items-baseline justify-between border-b border-neutral-300 pb-1.5 gap-2">
             <h2 className="text-base font-bold text-neutral-900 flex items-center gap-1.5">
-              <span>📅</span>
-              <span>2. 週間ケアプラン（予定）</span>
+              <span><CalendarDays className="ui-icon" aria-hidden="true" /></span>
+              <span>2. 家族で考えた1週間の予定</span>
             </h2>
             {/* 凡例 */}
             <div className="flex flex-wrap items-center gap-1.5 text-[10px] print:text-[8px] text-neutral-600">
-              {(Object.keys(KIND_DISPLAY_LABELS) as PlacementKind[]).map((kind) => (
+              {(Object.keys(KIND_LABELS) as PlacementKind[]).map((kind) => (
                 <span
                   key={kind}
                   className={`inline-flex items-center rounded border px-1.5 py-0.2 font-medium ${CALENDAR_COLORS[kind]}`}
                 >
-                  {KIND_DISPLAY_LABELS[kind]}
+                  {KIND_LABELS[kind]}
                 </span>
               ))}
             </div>
           </div>
 
           <div className="summary-calendar mt-3 overflow-x-auto rounded border border-neutral-300 bg-white">
-            <style>{`.summary-calendar-grid { --cal-row-h: 22px; }`}</style>
+            <style>{`.summary-calendar-grid { --cal-row-h: 34px; }`}</style>
             <div className="summary-calendar-grid min-w-[620px] text-xs">
               {/* 曜日ヘッダー */}
               <div className="summary-calendar-heading grid grid-cols-[48px_repeat(7,minmax(0,1fr))] border-b border-neutral-300 bg-neutral-100 font-bold text-center text-neutral-800">
@@ -295,7 +385,7 @@ export default function SummarySheet({
               {/* グリッド本体 */}
               <div className="summary-calendar-body grid grid-cols-[48px_repeat(7,minmax(0,1fr))]">
                 {/* 時刻軸 */}
-                <div className="border-r border-neutral-300 bg-neutral-50/70 font-mono text-[10px] print:text-[8px] text-neutral-500">
+                <div className="border-r border-neutral-300 bg-neutral-50/70 font-numeric tabular-nums text-[10px] print:text-[8px] text-neutral-500">
                   {HOURS.map((h) => (
                     <div
                       key={h}
@@ -341,7 +431,7 @@ export default function SummarySheet({
                         return (
                           <div
                             key={p.id}
-                            className={`summary-calendar-placement absolute inset-x-0.5 overflow-hidden rounded border px-1 py-0.5 text-[10px] print:text-[8px] leading-tight font-medium shadow-2xs z-10 flex flex-col justify-start ${CALENDAR_COLORS[p.kind]}`}
+                            className={`summary-calendar-placement absolute inset-x-0.5 overflow-hidden rounded border px-1 py-0.5 text-[10px] print:text-[7.5px] leading-[1.15] font-medium shadow-2xs z-10 flex flex-col justify-start ${CALENDAR_COLORS[p.kind]}`}
                             style={{
                               top: topCalc,
                               height: heightCalc,
@@ -350,12 +440,14 @@ export default function SummarySheet({
                             }}
                             title={`${info.title} ${info.timeRange}${p.note ? ` (${p.note})` : ""}`}
                           >
-                            <div className="font-bold truncate">{info.title}</div>
-                            <div className="font-mono text-[9px] print:text-[7px] text-neutral-600 truncate">
+                            <div className="font-bold whitespace-normal [overflow-wrap:anywhere] leading-[1.15]">
+                              {info.title}
+                            </div>
+                            <div className="font-numeric tabular-nums text-[9px] print:text-[7px] text-neutral-600 whitespace-normal [overflow-wrap:anywhere] leading-[1.1]">
                               {info.timeRange}
                             </div>
                             {p.note && (
-                              <div className="text-[9px] print:text-[7px] text-neutral-500 truncate hidden print:block sm:block">
+                              <div className="text-[9px] print:text-[7px] text-neutral-500 whitespace-normal [overflow-wrap:anywhere] leading-[1.15] hidden print:block sm:block">
                                 {p.note}
                               </div>
                             )}
@@ -370,10 +462,39 @@ export default function SummarySheet({
           </div>
         </section>
 
+        <p className="text-xs text-neutral-600">{scopeCopy.gapScope} {scopeCopy.validationLimits}</p>
+
+        {/* 面談での確認事項（該当する配置がある場合のみ独立セクションとして表示） */}
+        {checkNotes.length > 0 && (
+          <section
+            aria-label="面談での確認事項"
+            data-tutorial-target="summary-questions"
+            className="sheet-section break-inside-avoid"
+          >
+            <h2 className="text-base font-bold text-neutral-900 border-b border-neutral-300 pb-1.5 flex items-center gap-1.5">
+              <span aria-hidden="true"><Info className="ui-icon" aria-hidden="true" /></span>
+              <span>面談での確認事項</span>
+            </h2>
+            <ul className="mt-3 space-y-2">
+              {checkNotes.map((item) => (
+                <li
+                  key={item.id}
+                  className="rounded border border-teal-300 border-l-4 border-l-teal-500 bg-teal-50/70 p-3 text-xs text-teal-950 print:border-neutral-400 print:border-l-4 print:border-l-neutral-800 print:bg-white print:text-black"
+                >
+                  <p className="font-bold">{item.title}</p>
+                  <p className="mt-1 leading-relaxed text-teal-900 print:text-black">
+                    {item.text}
+                  </p>
+                </li>
+              ))}
+            </ul>
+          </section>
+        )}
+
         {/* 3. 負担の分担（家族の付き添い時間と概算費用） */}
-        <section className="sheet-section break-inside-avoid">
+        <section data-tutorial-target="summary-burden" className="sheet-section break-inside-avoid">
           <h2 className="text-base font-bold text-neutral-900 border-b border-neutral-300 pb-1.5 flex items-center gap-1.5">
-            <span>⚖️</span>
+            <span><Scale className="ui-icon" aria-hidden="true" /></span>
             <span>3. 負担の分担と月次概算費用</span>
           </h2>
 
@@ -388,12 +509,12 @@ export default function SummarySheet({
                       {burden.memberHours.map((m) => (
                         <tr key={m.personId} className="border-b border-neutral-100 last:border-none">
                           <td className="py-1 font-semibold text-neutral-800">{m.name}</td>
-                          <td className="py-1 text-right font-mono font-bold text-neutral-900">{m.hoursText} / 週</td>
+                          <td className="py-1 text-right font-numeric tabular-nums font-bold text-neutral-900">{m.hoursText} / 週</td>
                         </tr>
                       ))}
                       <tr className="border-t border-neutral-300 font-bold">
                         <td className="py-1.5 text-neutral-900">付き添い合計</td>
-                        <td className="py-1.5 text-right font-mono text-neutral-900">{burden.totalCareHoursText} / 週</td>
+                        <td className="py-1.5 text-right font-numeric tabular-nums text-neutral-900">{burden.totalCareHoursText} / 週</td>
                       </tr>
                     </tbody>
                   </table>
@@ -412,23 +533,25 @@ export default function SummarySheet({
                     <tbody>
                       <tr className="border-b border-neutral-100">
                         <td className="py-1 text-neutral-600">月換算単位数（限度額: {burden.limitUnitsText}）</td>
-                        <td className="py-1 text-right font-mono font-bold text-neutral-900">{burden.monthlyUnitsText}</td>
+                        <td className="py-1 text-right font-numeric tabular-nums font-bold text-neutral-900">{burden.monthlyUnitsText}</td>
                       </tr>
                       {burden.isOverLimit && (
                         <tr className="border-b border-neutral-100 text-amber-800 font-semibold">
                           <td className="py-1">限度額超過単位（全額負担）</td>
-                          <td className="py-1 text-right font-mono">{burden.overUnitsText}</td>
+                          <td className="py-1 text-right font-numeric tabular-nums">{burden.overUnitsText}</td>
                         </tr>
                       )}
                       <tr className="border-b border-neutral-100">
-                        <td className="py-1 text-neutral-600">内訳（枠内自己負担 / 枠外自己負担）</td>
-                        <td className="py-1 text-right font-mono text-[11px] text-neutral-700">
-                          {burden.withinYenText} / {burden.overYenText}
-                        </td>
+                        <td className="py-1 text-neutral-600">限度内の自己負担</td>
+                        <td className="py-1 text-right font-numeric tabular-nums">{burden.withinYenText}</td>
+                      </tr>
+                      <tr className="border-b border-neutral-100">
+                        <td className="py-1 text-neutral-600">限度を超えた分（全額自己負担）</td>
+                        <td className="py-1 text-right font-numeric tabular-nums">{burden.overYenText}</td>
                       </tr>
                       <tr className="border-t border-neutral-300 font-bold text-sm">
                         <td className="py-1.5 text-neutral-900">自己負担総額（月額概算）</td>
-                        <td className="py-1.5 text-right font-mono text-indigo-900">{burden.selfPayTotalText}</td>
+                        <td className="py-1.5 text-right font-numeric tabular-nums text-indigo-900">{burden.selfPayTotalText}</td>
                       </tr>
                     </tbody>
                   </table>
@@ -442,12 +565,13 @@ export default function SummarySheet({
           {/* 概算注記（必須表示） */}
           <div className="mt-3 rounded border border-neutral-200 bg-neutral-50 p-2.5 text-neutral-600 text-[11px] leading-relaxed">
             <p className="font-medium">{SUMMARY_DISCLAIMER_NOTE}</p>
+            <p>{scopeCopy.familyShare}</p>
           </div>
         </section>
       </article>
 
       {/* 画面下部の誘導ボタン（印刷時は非表示） */}
-      <div className="mt-8 flex justify-center print:hidden">
+      <div className="mt-8 flex flex-wrap justify-center gap-3 print:hidden">
         <Link
           href={`/rooms/${roomId}/board`}
           className="inline-flex min-h-[44px] items-center justify-center gap-2 rounded-xl border border-neutral-300 bg-white px-6 py-2.5 text-sm font-bold text-neutral-700 shadow-xs hover:bg-neutral-50 active:bg-neutral-100 transition-colors"
@@ -455,6 +579,7 @@ export default function SummarySheet({
           <span aria-hidden="true">←</span>
           <span>週間ボードで確認する</span>
         </Link>
+        {printButton("summary-print")}
       </div>
 
       {/* 印刷用CSS（A4 1〜2枚に収めるスタイル） */}
@@ -462,6 +587,8 @@ export default function SummarySheet({
         @page {
           size: A4 portrait;
           margin: 12mm 15mm;
+          /* 上余白は空欄にし、ブラウザーの日時・タイトルと本文ロゴの二重表示を防ぐ。 */
+          @top-center { content: " "; }
         }
 
         @media print {
@@ -509,17 +636,19 @@ export default function SummarySheet({
           .summary-calendar-grid {
             min-width: 0 !important;
             width: 100% !important;
-            --cal-row-h: 32px;
+            --cal-row-h: 36px;
           }
 
           .summary-calendar-grid [title] {
-            padding: 0 2px !important;
+            padding: 1px 2px !important;
             box-shadow: none !important;
           }
 
           .summary-calendar-grid [title] > div {
-            font-size: 8px !important;
-            line-height: 10px !important;
+            font-size: 7.5px !important;
+            line-height: 9px !important;
+            white-space: normal !important;
+            overflow-wrap: anywhere !important;
           }
           .sheet-section h2 { break-after: avoid; }
           tr { break-inside: avoid; page-break-inside: avoid; }

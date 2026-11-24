@@ -59,8 +59,8 @@ describe("代替案の変更要約", () => {
     expectComparison("長女の付き添い", "27 時間/週", "18 時間/週");
     expectComparison("長男の付き添い", "8 時間/週", "12 時間/週");
     expect(screen.queryByText("父の付き添い")).toBeNull();
-    expect(screen.getByText(/概算であり実際の請求額ではありません/)).toBeTruthy();
-    expect(screen.getByText(/食費・居住費・各種加算は含みません/)).toBeTruthy();
+    expect(screen.getByText(/1単位10円・30日の月として試算した目安/)).toBeTruthy();
+    expect(screen.getByText(/食費・居住費（滞在費）・各種加算は含みません/)).toBeTruthy();
   });
 
   it("固定案以外でも渡された検証結果を表示し、配置や固定値から計算し直さない", () => {
@@ -190,7 +190,7 @@ describe("代替案の変更要約", () => {
     expect(screen.queryByText("変更の要約")).toBeNull();
     expect(screen.queryByText("28,131 単位")).toBeNull();
     expect(screen.queryByText("24,094 単位")).toBeNull();
-    expect(screen.getByText(/古い版への提案のため適用できません/)).toBeTruthy();
+    expect(screen.getByText(/変更前のプランへの提案のため適用できません/)).toBeTruthy();
     const staleButtons = screen.getAllByRole("button", { name: "採用する" });
     expect(staleButtons).toHaveLength(1);
     const button = staleButtons[0] as HTMLButtonElement;
@@ -252,5 +252,21 @@ describe("代替案の変更要約", () => {
     // バナー内にリンクが含まれないことを再確認
     const updatedBanner = screen.getByRole("status");
     expect(within(updatedBanner).queryByRole("link")).toBeNull();
+  });
+
+  it("チュートリアル対象 proposal-card は1件目の要約・参考・変更の内訳をまとめて囲むコンテナに付く", () => {
+    const { container } = render(
+      <PlanActions {...props({ proposals: [proposal(), proposal({ summary: "2件目の案" })] })} />,
+    );
+
+    const targets = container.querySelectorAll('[data-proposals-tutorial-target="proposal-card"]');
+    expect(targets).toHaveLength(1);
+    const target = targets[0] as HTMLElement;
+
+    expect(within(target).getByText("変更の要約")).toBeTruthy();
+    expect(within(target).getByText(/参考：希望への沿い具合/)).toBeTruthy();
+    const details = target.querySelector("details");
+    expect(details).not.toBeNull();
+    expect(within(target).getByText(/変更の内訳を見る/)).toBeTruthy();
   });
 });
