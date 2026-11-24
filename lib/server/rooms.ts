@@ -6,8 +6,8 @@
  *
  * 招待の信頼境界（共通前提）：
  * - 招待の発行は対象ルームの既存 family に限る
- * - トークンは128bit以上のランダム値・有効24時間・1回のみ使用
- * - サーバー側にはトークンのハッシュ・roomId・role・expiresAt・usedAt を保存する
+ * - トークンは128bit以上のランダム値・有効24時間・期限内は回数制限なし
+ * - サーバー側にはトークンのハッシュ・roomId・role・expiresAt を保存する
  * - 参加時は保存値だけを検証・採用し、リクエストで送られた role は採用しない
  * - 参加確定と membership 作成は transaction で処理する
  */
@@ -24,6 +24,7 @@ import {
   type MemberRole,
   type Person,
 } from "../types";
+import { MAX_ROOM_NAME_LENGTH } from "../room-display-name";
 import { ApiError } from "./errors";
 import { adminDb } from "./firebase-admin";
 import {
@@ -58,7 +59,7 @@ export function validatePeople(raw: unknown): Person[] {
   const ids = new Set<string>();
   const parsed = raw.map((item) => {
     if (!isRecord(item)) throw new ApiError(400, "invalid_people");
-    const { id, name, canProvideCare, careRole, icon } = item;
+    const { id, name, canProvideCare, careRole, icon, order } = item;
     if (typeof id !== "string" || id.length < 1 || id.length > 128) {
       throw new ApiError(400, "invalid_people");
     }
@@ -68,6 +69,12 @@ export function validatePeople(raw: unknown): Person[] {
       throw new ApiError(400, "invalid_people");
     }
     if (icon !== undefined && (typeof icon !== "string" || icon.trim().length > 16)) {
+      throw new ApiError(400, "invalid_people");
+    }
+    if (
+      order !== undefined &&
+      (typeof order !== "number" || !Number.isInteger(order) || order < 0 || order > 1000)
+    ) {
       throw new ApiError(400, "invalid_people");
     }
     let role: CareRole | undefined;
@@ -91,6 +98,9 @@ export function validatePeople(raw: unknown): Person[] {
     }
     if (typeof icon === "string" && icon.trim().length > 0) {
       p.icon = icon.trim();
+    }
+    if (order !== undefined) {
+      p.order = order;
     }
     return p;
   });
@@ -129,11 +139,33 @@ export function validateCopayRate(raw: unknown): CopayRate {
   throw new ApiError(400, "invalid_copay_rate");
 }
 
+/** ルーム名の最大文字数 */
+export { MAX_ROOM_NAME_LENGTH };
+
+/**
+ * ルーム名（任意）の検証と整形。
+ * - 未指定・空文字（空白のみ含む）は「未設定」（undefined）として扱う
+ * - 文字列以外、または最大文字数超過は 400（invalid_room_name）
+ */
+export function validateRoomName(raw: unknown): string | undefined {
+  if (raw === undefined) return undefined;
+  if (typeof raw !== "string") {
+    throw new ApiError(400, "invalid_room_name");
+  }
+  const trimmed = raw.trim();
+  if (trimmed.length === 0) return undefined;
+  if (trimmed.length > MAX_ROOM_NAME_LENGTH) {
+    throw new ApiError(400, "invalid_room_name");
+  }
+  return trimmed;
+}
+
 // ---------------------------------------------------------------------------
 // ルーム作成
 // ---------------------------------------------------------------------------
 
 export interface CreateRoomInput {
+  name?: string;
   people: Person[];
   careWindows: CareWindow[];
   copayRate: CopayRate;
@@ -151,7 +183,7 @@ export async function createRoom(
   const roomId = crypto.randomUUID();
   const batch = db.batch();
 
-  batch.set(db.doc(firestorePaths.room(roomId)), {
+  const roomData: Record<string, unknown> = {
     creatorUid,
     isDemo: false,
     revision: 0,
@@ -159,10 +191,17 @@ export async function createRoom(
     careLevel: 3,
     copayRate: input.copayRate,
     createdAt: FieldValue.serverTimestamp(),
-  });
-  for (const person of input.people) {
-    batch.set(db.doc(firestorePaths.person(roomId, person.id)), person);
+  };
+  if (input.name !== undefined) {
+    roomData.name = input.name;
   }
+  batch.set(db.doc(firestorePaths.room(roomId)), roomData);
+  input.people.forEach((person, index) => {
+    batch.set(db.doc(firestorePaths.person(roomId, person.id)), {
+      ...person,
+      order: person.order ?? index,
+    });
+  });
   batch.set(db.doc(firestorePaths.member(roomId, creatorUid)), {
     role: "family" satisfies MemberRole,
     createdAt: FieldValue.serverTimestamp(),
@@ -189,7 +228,7 @@ export interface CreateInviteResult {
 
 /**
  * 招待リンクを発行する。発行できるのは対象ルームの既存 family のみ。
- * 保存するのはトークンのハッシュ（ドキュメントID）と role・期限・使用状態だけ。
+ * 保存するのはトークンのハッシュ（ドキュメントID）と role・期限などの発行情報。
  */
 export async function createInvite(
   callerUid: string,
@@ -219,11 +258,9 @@ export async function createInvite(
   await db.doc(`${firestorePaths.invites(roomId)}/${hash}`).set({
     role,
     expiresAt,
-    usedAt: null,
     createdAt: Timestamp.fromMillis(now),
-  } satisfies Omit<InviteDoc, "expiresAt" | "usedAt" | "createdAt"> & {
+  } satisfies Omit<InviteDoc, "expiresAt" | "createdAt"> & {
     expiresAt: Timestamp;
-    usedAt: null;
     createdAt: Timestamp;
   });
 
@@ -243,7 +280,7 @@ export interface JoinRoomResult {
  * 招待トークンで参加を確定する。role は保存値だけから決める
  * （リクエストで送られた role は受け付けない）。
  * 参加確定と membership 作成は transaction で処理する。
- * すでに参加済みの場合は、トークンを消費せず既存の role を返す。
+ * すでに参加済みの場合は、既存の role を返す。
  */
 export async function joinRoom(
   uid: string,
@@ -265,9 +302,6 @@ export async function joinRoom(
       throw new ApiError(400, "invite_not_found");
     }
     const invite = inviteSnap.data() as unknown as InviteDoc;
-    if (invite.usedAt !== null) {
-      throw new ApiError(409, "invite_already_used");
-    }
     if (invite.expiresAt.toMillis() <= Date.now()) {
       throw new ApiError(410, "invite_expired");
     }
@@ -282,7 +316,6 @@ export async function joinRoom(
       role: invite.role,
       createdAt: FieldValue.serverTimestamp(),
     });
-    tx.update(inviteRef, { usedAt: FieldValue.serverTimestamp() });
     return { role: invite.role, alreadyMember: false };
   });
 }
