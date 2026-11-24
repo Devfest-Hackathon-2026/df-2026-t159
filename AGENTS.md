@@ -20,7 +20,7 @@ CarePact：親の介護に直面した家族が、介護保険の数字を見な
   - people：`{ id, name, canProvideCare }`。ログインしない家族も含む。**被介護者本人は canProvideCare=false**。付き添いの配置と負担集計の対象は canProvideCare=true の人だけ。**people は初期登録後、変更不可**
   - members：`rooms/{roomId}/members/{uid}`（Firebase 匿名認証のUID）。role は family／careManager
 - **members ドキュメントを作れるのはサーバーだけ**（クライアントからの直接作成・更新・削除はルールで禁止）
-- 招待トークンは 128bit 以上のランダム値・有効24時間・1回のみ使用。サーバー側にハッシュ等を保存し、参加時は保存値だけを採用する（リクエストで送られた role は採用しない）
+- 招待トークンは 128bit 以上のランダム値・有効24時間・期限内は回数制限なし。サーバー側にハッシュ等を保存し、参加時は保存値だけを採用する（リクエストで送られた role は採用しない）
 - 権限表（正本）：未参加者は全ルームデータを読めない。参加者（family／careManager）は people・placements・constraints・設定・summary・comments を閲覧できる。**入力の更新と確定は family のみ**。**コメントの作成は careManager のみ**（本文1〜1,000字、authorUid＝認証UID、createdAt＝サーバー時刻）。コメントの更新・削除・返信・通知は MVP 外
 - Firestoreルールの合格条件：未参加者はそのルームを読めない／自分の role を昇格できない／他人の membership を変更できない／careManager はコメント作成以外の書き込みができない（開放ルールは禁止）
 - 入力・デモはすべて架空データに限定。画像原本は保存しない。画像・メモ本文・制約本文・招待トークン・ID トークンをログに出さない
