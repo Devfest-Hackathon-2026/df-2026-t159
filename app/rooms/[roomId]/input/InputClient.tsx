@@ -1,63 +1,83 @@
 "use client";
 
 /**
- * 入力画面（Issue 7 改修 ＋ 最終チェック9項目対応）：
+ * 入力画面（統一UI・時間帯まとめ表示・色案F改）：
  * - 上部にステップ表示（1. 事情を入れる → 2. ボードで組む → 3. 確定・印刷）
  * - 見出し「まず、ご家族の事情を教えてください」
- * - 左カラム：
- *   - 退院書類の写真アップロードカード（選択したファイル名と状態が分かる表示）
- *   - 家族の事情メモの入力欄（事情メモから条件・希望の下書きを作るAIボタン＋説明）
- *   - 介護が必要な時間帯（careWindows）と自己負担割合の設定（未入力行は先頭表示、日時選択で曜日・時刻順ソート）
+ * - 左カラム（PC表示／モバイル表示では家族カードの下）：
+ *   - 退院書類の写真アップロードカード
+ *   - 家族の事情メモの入力欄（AIで条件・希望の下書きを作る）
+ *   - 介護が必要な時間帯（同じ時間帯の曜日をまとめ表示＋一括追加）と自己負担割合
  * - 右カラム：
- *   - 「Geminiの整理」パネル（簡易／詳細の切り替えで隠す・表示できる）
- *   - 整理結果（制約）のカード一覧（重複バッジ解消、対象・分類の自動反映、AI読み取りメモ名非表示、時刻行横にゴミ箱アイコン削除）
- *   - 曜日・時刻がない希望は下の「家族の希望（自由記述）」へ自動集約（入力欄を縦に広く表示）
- *   - 「分からないこと」の破線枠ボックス
- *   - 入力画面の保存を1つに統合（時間帯・負担割合・Geminiの整理をまとめて保存、保存後も整理表示を維持）
- *   - 画面遷移しても未保存の下書きが消えないよう保持
+ *   - 登録されている家族カード（コンパクト表示／モバイル縦積みでは先頭に維持）
+ *   - 「Geminiの整理」統一UIパネル（簡易／詳細切替なし、その場編集）
+ *   - 条件カード／家族の希望（自由記述・1行1件）／分からないことの行UI
+ *   - 入力画面の保存を1つに統合（時間帯・負担割合・Geminiの整理をまとめて保存）
  */
 
+import { Camera, FileText, PenLine, Settings, Sparkles, TriangleAlert, Upload, Users } from "lucide-react";
+import { scopeCopy } from "@/lib/scope-copy";
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 import { doc, getDocFromServer } from "firebase/firestore";
-import { useCallback, useEffect, useState } from "react";
-import RoomHeader from "@/components/RoomHeader";
-import { getIdToken, useAnonymousUser } from "@/lib/auth";
+import { useCallback, useEffect, useRef, useState, type MouseEvent } from "react";
+import { createPortal } from "react-dom";
+import { useRoomNavigationGuard } from "@/components/RoomShell";
+import CareWindowsSection, { type EditingWindowGroup } from "./CareWindowsSection";
+import { createDemoDischargeImage } from "@/lib/demo-discharge-image";
+import DemoInputTutorial from "./DemoInputTutorial";
+import GeminiReviewPanel from "./GeminiReviewPanel";
+import { getIdToken, useAnonymousAuth } from "@/lib/auth";
+import { AiApiError } from "@/lib/ai/errors";
+import { validateStructureImageSelection } from "@/lib/ai/inputValidation";
+import { bindStructureDrafts } from "@/lib/ai/structureSave";
+import { replaceCareWindowsForDays } from "@/lib/care-windows-group";
+import { demoFixture } from "@/lib/demo-fixture";
+import {
+  hasWeekendDaysSelected,
+  hasSeenDemoInputTutorial,
+  markDemoInputTutorialDone,
+  markDemoInputTutorialStarted,
+  type DemoInputTutorialStepNumber,
+} from "@/lib/demo-input-tutorial";
 import { fetchDemoStructureClient } from "@/lib/demo/client";
 import { db } from "@/lib/firebase";
 import {
   canDeletePerson,
-  getPersonAvatarText,
-  getPersonRoleLabel,
+  CARE_ROLE_LABELS,
+  deriveCareRole,
   normalizePeople,
   validatePeopleCareRoles,
 } from "@/lib/people";
-import PersonIconPicker from "@/components/PersonIconPicker";
+import MemberAvatar from "@/components/MemberAvatar";
 import {
   commitRoomChange,
   readOwnMembership,
   readRoomSnapshot,
 } from "@/lib/rooms";
 import {
-  DAY_LABELS,
+  DraftBaseRevisionMissingError,
+  RevisionConflictError,
   canSubmitStructure,
   careWindowDraftsFromWindows,
-  createEmptyCareWindowDraft,
+  clearInputScreenDraft,
   emptyReviewDraft,
   getInputScreenDraft,
   inferConstraintTypeFromDetail,
   linesToList,
   listToLines,
+  resolveInputDraftSaveRevision,
+  resolveNextDraftBaseRevision,
   resolveUniquePersonId,
   reviewDraftsFromSnapshot,
   reviewDraftsFromStructureResult,
   saveInputScreenDraft,
   separateDatelessHopes,
-  sortCareWindowDrafts,
   toCareWindows,
   toStructureSaveConstraints,
   unboundDraftCount,
   validateCareWindowDrafts,
-  validateReviewDraft,
+  validateInputSaveLimits,
   type CareWindowDraft,
   type ReviewDraft,
 } from "@/lib/structure-review";
@@ -67,7 +87,6 @@ import {
   BOARD_START_HOUR,
   firestorePaths,
   type CareRole,
-  type ConstraintType,
   type CopayRate,
   type DayIndex,
   type MemberDoc,
@@ -76,76 +95,50 @@ import {
   type RoomSnapshot,
 } from "@/lib/types";
 
-const TYPE_CONFIG: Record<
-  ConstraintType,
-  { label: string; border: string; badge: string; dot: string }
-> = {
-  unavailable: {
-    label: "対応不可",
-    border: "border-l-red-500",
-    badge: "bg-red-100 text-red-800 border border-red-300",
-    dot: "bg-red-500",
-  },
-  hope: {
-    label: "希望",
-    border: "border-l-emerald-500",
-    badge: "bg-emerald-100 text-emerald-800 border border-emerald-300",
-    dot: "bg-emerald-500",
-  },
-  other: {
-    label: "その他",
-    border: "border-l-sky-500",
-    badge: "bg-sky-100 text-sky-800 border border-sky-300",
-    dot: "bg-sky-500",
-  },
+const ROLE_DOT_COLORS: Record<CareRole, string> = {
+  recipient: "bg-[#65519A]",
+  caregiver: "bg-emerald-700",
+  family: "bg-gray-500",
 };
 
-const CONSTRAINT_START_HOURS = Array.from({ length: 24 }, (_, i) => i);
-const CONSTRAINT_END_HOURS = Array.from({ length: 24 }, (_, i) => i + 1);
-const WINDOW_START_HOURS = Array.from(
-  { length: BOARD_END_HOUR - BOARD_START_HOUR },
-  (_, i) => BOARD_START_HOUR + i,
-);
-const WINDOW_END_HOURS = Array.from(
-  { length: BOARD_END_HOUR - BOARD_START_HOUR },
-  (_, i) => BOARD_START_HOUR + 1 + i,
-);
-const ALL_DAYS: DayIndex[] = [0, 1, 2, 3, 4, 5, 6];
-
-function computeInitialOpenDays(
-  windowDrafts: readonly CareWindowDraft[],
-): Record<DayIndex, boolean> {
-  const open: Record<DayIndex, boolean> = {
-    0: false,
-    1: false,
-    2: false,
-    3: false,
-    4: false,
-    5: false,
-    6: false,
-  };
-  for (const w of windowDrafts) {
-    const day: DayIndex = w.day === "" ? 0 : w.day;
-    open[day] = true;
-  }
-  return open;
+function FamilyRoleDot({ role }: { role: CareRole }) {
+  return <span aria-hidden="true" className={`size-2 shrink-0 rounded-full ${ROLE_DOT_COLORS[role]}`} />;
 }
 
+const DEMO_TUTORIAL_HIDDEN_WEEKEND_EVENING_SLOTS: ReadonlyArray<{
+  day: DayIndex;
+  startHour: number;
+  endHour: number;
+}> = [
+  { day: 5, startHour: 17, endHour: 21 },
+  { day: 6, startHour: 17, endHour: 21 },
+];
+
 export default function InputClient({ roomId }: { roomId: string }) {
-  const user = useAnonymousUser();
+  const router = useRouter();
+  const {
+    user,
+    error: authError,
+    retry: retryAuth,
+  } = useAnonymousAuth();
 
   const [membership, setMembership] = useState<MemberDoc | null | undefined>(
     undefined,
   );
+  const [membershipError, setMembershipError] = useState<string | null>(null);
   const [snapshot, setSnapshot] = useState<RoomSnapshot | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [isDemo, setIsDemo] = useState(false);
 
   // 構造化の入力（既存の下書きがあれば初期復元）
   const initialSavedDraft = getInputScreenDraft(roomId);
+  const [hasLocalDraft, setHasLocalDraft] = useState(
+    Boolean(initialSavedDraft?.dirty),
+  );
   const [memo, setMemo] = useState(initialSavedDraft?.memo ?? "");
   const [imageFiles, setImageFiles] = useState<File[]>([]);
   const [imagePreviewUrls, setImagePreviewUrls] = useState<string[]>([]);
+  const [imageError, setImageError] = useState<string | null>(null);
   const [structuring, setStructuring] = useState(false);
   const [structureError, setStructureError] = useState<string | null>(null);
   const [structureNotice, setStructureNotice] = useState<string | null>(null);
@@ -184,18 +177,26 @@ export default function InputClient({ roomId }: { roomId: string }) {
     initialSavedDraft?.dirty ? initialSavedDraft.unknownsText : "",
   );
 
-  // Geminiの整理：簡易／詳細の表示切り替え
-  const [viewMode, setViewMode] = useState<"detailed" | "simple">("detailed");
+  // その場編集の状態
+  const [editingDraft, setEditingDraft] = useState<{
+    index: number;
+    backup: ReviewDraft | null;
+  } | null>(null);
+  const [editingHope, setEditingHope] = useState<{
+    index: number;
+    value: string;
+  } | null>(null);
+  const [editingUnknown, setEditingUnknown] = useState<{
+    index: number;
+    value: string;
+  } | null>(null);
 
   // 介護が必要な時間帯・自己負担割合の状態
   const [careWindowDrafts, setCareWindowDrafts] = useState<CareWindowDraft[]>(
     initialSavedDraft?.dirty ? initialSavedDraft.careWindowDrafts : [],
   );
-  const [openDays, setOpenDays] = useState<Record<DayIndex, boolean>>(() =>
-    computeInitialOpenDays(
-      initialSavedDraft?.dirty ? initialSavedDraft.careWindowDrafts : [],
-    ),
-  );
+  const [editingWindowGroup, setEditingWindowGroup] =
+    useState<EditingWindowGroup | null>(null);
   const [copayRate, setCopayRate] = useState<CopayRate>(
     initialSavedDraft?.dirty ? initialSavedDraft.copayRate : 1,
   );
@@ -205,6 +206,10 @@ export default function InputClient({ roomId }: { roomId: string }) {
   const [savingAll, setSavingAll] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
   const [savedRevision, setSavedRevision] = useState<number | null>(null);
+  const [pendingNavigation, setPendingNavigation] = useState<{
+    href: string;
+    placement: "header" | "footer";
+  } | null>(null);
 
   // 家族の追加・編集
   const [isEditingPeople, setIsEditingPeople] = useState(false);
@@ -215,10 +220,46 @@ export default function InputClient({ roomId }: { roomId: string }) {
     Record<string, string>
   >({});
 
+  // デモルーム専用チュートリアル（表示レイヤーのみ）
+  const [tutorialStep, setTutorialStep] =
+    useState<DemoInputTutorialStepNumber | null>(null);
+  const [tutorialSavedVisual, setTutorialSavedVisual] = useState(false);
+  const demoImageInitialized = useRef(false);
+  const memoGuideSlot = useRef<HTMLDivElement>(null);
+
   const canEdit = membership?.role === "family";
+  useEffect(() => {
+    if (!isDemo || !snapshot || demoImageInitialized.current) return;
+    demoImageInitialized.current = true;
+    try {
+      setImageFiles([createDemoDischargeImage(demoFixture.documents.dischargeSummary)]);
+    } catch {
+      setImageError("見本の写真を用意できませんでした。写真を選択できます。");
+    }
+  }, [isDemo, snapshot]);
+
+  const startDemoTutorial = useCallback(() => {
+    markDemoInputTutorialStarted(roomId);
+    setTutorialSavedVisual(false);
+    setTutorialStep(1);
+  }, [roomId]);
+
+  useEffect(() => {
+    if (isDemo && canEdit && snapshot && !hasSeenDemoInputTutorial(roomId)) {
+      startDemoTutorial();
+    }
+  }, [isDemo, canEdit, snapshot, roomId, startDemoTutorial]);
+
+  const isTutorialActive = isDemo && canEdit && tutorialStep !== null;
+
+  const finishDemoTutorial = useCallback(() => {
+    markDemoInputTutorialDone(roomId);
+    setTutorialStep(null);
+    setTutorialSavedVisual(false);
+  }, [roomId]);
 
   const handleStartEditingPeople = () => {
-    if (!snapshot) return;
+    if (!snapshot || isTutorialActive) return;
     setDraftPeople(snapshot.people.map((p) => ({ ...p })));
     setPeopleError(null);
     setPeopleDeleteWarnings({});
@@ -290,17 +331,29 @@ export default function InputClient({ roomId }: { roomId: string }) {
     setPeopleError(null);
     try {
       const normalized = normalizePeople(
-        draftPeople.map((p) => ({
+        draftPeople.map((p, index) => ({
           id: p.id,
           name: p.name.trim(),
           canProvideCare: p.careRole === "caregiver",
           careRole: p.careRole,
           icon: p.icon,
+          order: index,
         })),
       );
-      const nextRevision = await commitRoomChange(roomId, snapshot.revision, {
+      const expectedRevision = snapshot.revision;
+      const nextRevision = await commitRoomChange(roomId, expectedRevision, {
         people: normalized,
       });
+      const existingDraft = getInputScreenDraft(roomId);
+      if (
+        existingDraft?.dirty &&
+        existingDraft.baseRevision === expectedRevision
+      ) {
+        saveInputScreenDraft(roomId, {
+          ...existingDraft,
+          baseRevision: nextRevision,
+        });
+      }
       setSnapshot((prev) =>
         prev
           ? {
@@ -334,6 +387,7 @@ export default function InputClient({ roomId }: { roomId: string }) {
       }>,
     ) => {
       const existing = getInputScreenDraft(roomId);
+      const nextDirty = next.dirty ?? existing?.dirty ?? true;
       saveInputScreenDraft(roomId, {
         memo: next.memo ?? existing?.memo ?? memo,
         drafts: next.drafts ?? existing?.drafts ?? drafts,
@@ -345,28 +399,45 @@ export default function InputClient({ roomId }: { roomId: string }) {
           existing?.careWindowDrafts ??
           careWindowDrafts,
         copayRate: next.copayRate ?? existing?.copayRate ?? copayRate,
-        dirty: next.dirty ?? existing?.dirty ?? true,
+        dirty: nextDirty,
+        baseRevision: resolveNextDraftBaseRevision(existing, snapshot?.revision),
       });
+      setHasLocalDraft(nextDirty);
     },
-    [roomId, memo, drafts, hopesText, unknownsText, careWindowDrafts, copayRate],
+    [
+      roomId,
+      memo,
+      drafts,
+      hopesText,
+      unknownsText,
+      careWindowDrafts,
+      copayRate,
+      snapshot?.revision,
+    ],
   );
 
   const applySnapshot = useCallback(
-    (snap: RoomSnapshot, forceOverwrite = false) => {
+    (snap: RoomSnapshot, forceOverwrite = false, roomIsDemo: boolean = false) => {
       setSnapshot(snap);
+      setEditingDraft(null);
+      setEditingHope(null);
+      setEditingUnknown(null);
+      setEditingWindowGroup(null);
       const saved = getInputScreenDraft(roomId);
       if (saved && saved.memo !== "") {
         setMemo(saved.memo);
+      } else if (roomIsDemo && (!saved || !saved.dirty || forceOverwrite)) {
+        setMemo(demoFixture.documents.familyMemo);
       }
       if (!forceOverwrite && saved?.dirty) {
         // 未保存の下書きがある場合は画面遷移後も失われないよう復元する
-        // ただし対象が未選択で一意に名前が一致するものがあれば補完する
+        // ただし対象が未選択または現在の家族一覧にない場合は、一意に名前が一致する人だけ補完する
+        const peopleIds = new Set(snap.people.map((p) => p.id));
         const reboundDrafts = saved.drafts.map((d) => {
-          if (d.personId === "" && !d.manualPersonId) {
-            const autoId = resolveUniquePersonId(d, snap.people);
-            if (autoId !== "") {
-              return { ...d, personId: autoId };
-            }
+          const isMissingOrInvalid =
+            d.personId === "" || !peopleIds.has(d.personId);
+          if (isMissingOrInvalid && (!d.manualPersonId || d.personId !== "")) {
+            return { ...d, personId: resolveUniquePersonId(d, snap.people) };
           }
           return d;
         });
@@ -374,7 +445,6 @@ export default function InputClient({ roomId }: { roomId: string }) {
         setHopesText(saved.hopesText);
         setUnknownsText(saved.unknownsText);
         setCareWindowDrafts(saved.careWindowDrafts);
-        setOpenDays(computeInitialOpenDays(saved.careWindowDrafts));
         setCopayRate(saved.copayRate);
         return;
       }
@@ -397,7 +467,6 @@ export default function InputClient({ roomId }: { roomId: string }) {
       setHopesText(nextHopesText);
       setUnknownsText(nextUnknownsText);
       setCareWindowDrafts(nextWindowDrafts);
-      setOpenDays(computeInitialOpenDays(nextWindowDrafts));
       setCopayRate(snap.copayRate);
     },
     [roomId],
@@ -405,32 +474,44 @@ export default function InputClient({ roomId }: { roomId: string }) {
 
   const refresh = useCallback(async () => {
     if (!user) return;
-    const member = await readOwnMembership(roomId, user.uid);
+    setMembershipError(null);
+    setLoadError(null);
+    let member: MemberDoc | null;
+    try {
+      member = await readOwnMembership(roomId, user.uid);
+    } catch {
+      setMembershipError(scopeCopy.membershipLoadFailed);
+      return;
+    }
     setMembership(member);
     if (member) {
       // デモルーム判定は rooms/{roomId} の isDemo（RoomSnapshot には含まれない）
+      let roomIsDemo = false;
       try {
         const roomSnap = await getDocFromServer(
           doc(db, firestorePaths.room(roomId)),
         );
-        setIsDemo(
-          roomSnap.exists()
-            ? ((roomSnap.data() as RoomDoc).isDemo ?? false)
-            : false,
-        );
+        roomIsDemo = roomSnap.exists()
+          ? ((roomSnap.data() as RoomDoc).isDemo ?? false)
+          : false;
       } catch {
-        setIsDemo(false);
+        roomIsDemo = false;
       }
       try {
         const snap = await readRoomSnapshot(roomId);
         if (snap) {
-          applySnapshot(snap);
+          setIsDemo(roomIsDemo);
+          applySnapshot(snap, false, roomIsDemo);
         } else {
+          setIsDemo(roomIsDemo);
+          setTutorialStep(null);
           setLoadError(
             "ルームの読み込みに失敗しました。もう一度お試しください。",
           );
         }
       } catch {
+        setIsDemo(roomIsDemo);
+        setTutorialStep(null);
         setLoadError(
           "ルームの読み込みに失敗しました。もう一度お試しください。",
         );
@@ -446,10 +527,19 @@ export default function InputClient({ roomId }: { roomId: string }) {
   const requestRealStructure = async (
     token: string,
   ): Promise<StructureDraftResult | null> => {
+    const selectedFiles = imageFiles.slice(0, 2);
+    const { errors: imageValidationErrors } = validateStructureImageSelection(
+      0,
+      selectedFiles,
+    );
+    if (imageValidationErrors.length > 0) {
+      setStructureError(imageValidationErrors.join(" / "));
+      return null;
+    }
     const form = new FormData();
     form.set("roomId", roomId);
     form.set("memo", memo);
-    for (const file of imageFiles.slice(0, 2)) {
+    for (const file of selectedFiles) {
       form.append("images", file);
     }
     const res = await fetch("/api/structure", {
@@ -476,6 +566,12 @@ export default function InputClient({ roomId }: { roomId: string }) {
   };
 
   const handleStructure = async () => {
+    if (isTutorialActive) {
+      if (tutorialStep === 3) {
+        setTutorialStep(4);
+      }
+      return;
+    }
     setStructuring(true);
     setStructureError(null);
     setStructureNotice(null);
@@ -509,6 +605,9 @@ export default function InputClient({ roomId }: { roomId: string }) {
       setDrafts(separated.drafts);
       setHopesText(nextHopesText);
       setUnknownsText(nextUnknownsText);
+      setEditingDraft(null);
+      setEditingHope(null);
+      setEditingUnknown(null);
       setSavedRevision(null);
       persistDraftState({
         drafts: separated.drafts,
@@ -517,11 +616,16 @@ export default function InputClient({ roomId }: { roomId: string }) {
         dirty: true,
       });
 
-      const remainingUnbound = unboundDraftCount(separated.drafts);
+      const remainingUnbound = unboundDraftCount(
+        separated.drafts,
+        snapshot?.people,
+      );
       setStructureNotice(
         remainingUnbound > 0
           ? `下書きを作成しました。右側の「Geminiの整理」で未選択の対象（${remainingUnbound}件）を選び、内容を確認して保存してください。`
-          : "下書きを作成しました。対象の家族を選び、内容を確認して保存してください。",
+          : separated.drafts.length === 0
+            ? "下書きを作成しました。「分からないこと・書かれていないこと」を確認し、必要に応じて条件を追加して保存してください。"
+            : "下書きを作成しました。対象の家族を選び、内容を確認して保存してください。",
       );
     } catch {
       setStructureError("通信に失敗しました。もう一度お試しください。");
@@ -541,6 +645,13 @@ export default function InputClient({ roomId }: { roomId: string }) {
         if (patch.type !== undefined) {
           updated.manualType = true;
         }
+        if (
+          "startHour" in patch ||
+          "endHour" in patch ||
+          patch.provisional === false
+        ) {
+          delete updated.provisional;
+        }
         if (patch.detail !== undefined) {
           if (!updated.manualPersonId) {
             updated.personId = resolveUniquePersonId(
@@ -549,7 +660,7 @@ export default function InputClient({ roomId }: { roomId: string }) {
             );
           }
           if (!updated.manualType) {
-            updated.type = inferConstraintTypeFromDetail(patch.detail, "other");
+            updated.type = inferConstraintTypeFromDetail(patch.detail, "hope");
           }
         }
         return updated;
@@ -581,21 +692,60 @@ export default function InputClient({ roomId }: { roomId: string }) {
       persistDraftState({ drafts: next, dirty: true });
       return next;
     });
-    setSavedRevision(null);
-  };
-
-  const addDraft = () => {
-    setDrafts((prev) => {
-      const next = [...prev, emptyReviewDraft()];
-      persistDraftState({ drafts: next, dirty: true });
-      return next;
+    setEditingDraft((prev) => {
+      if (!prev) return null;
+      if (prev.index === index) return null;
+      if (prev.index > index) return { ...prev, index: prev.index - 1 };
+      return prev;
     });
     setSavedRevision(null);
   };
 
+  const addDraft = () => {
+    const nextIndex = drafts.length;
+    const next = [...drafts, emptyReviewDraft()];
+    setDrafts(next);
+    persistDraftState({ drafts: next, dirty: true });
+    setEditingDraft({ index: nextIndex, backup: null });
+    setSavedRevision(null);
+  };
+
+  const startEditDraft = (index: number) => {
+    const target = drafts[index];
+    if (!target) return;
+    setEditingDraft({
+      index,
+      backup: { ...target, days: [...target.days] },
+    });
+  };
+
+  const finishEditDraft = () => {
+    setEditingDraft(null);
+  };
+
+  const cancelEditDraft = () => {
+    if (!editingDraft) return;
+    if (editingDraft.backup === null) {
+      const next = drafts.filter((_, i) => i !== editingDraft.index);
+      setDrafts(next);
+      persistDraftState({ drafts: next, dirty: true });
+    } else {
+      const restored = editingDraft.backup;
+      const next = drafts.map((d, i) =>
+        i === editingDraft.index ? restored : d,
+      );
+      setDrafts(next);
+      persistDraftState({ drafts: next, dirty: true });
+    }
+    setEditingDraft(null);
+    setSavedRevision(null);
+  };
+
   const handleMemoChange = (value: string) => {
+    if (isTutorialActive) return;
     setMemo(value);
     const existing = getInputScreenDraft(roomId);
+    const nextDirty = existing?.dirty ?? true;
     saveInputScreenDraft(roomId, {
       memo: value,
       drafts: existing?.drafts ?? drafts,
@@ -603,86 +753,264 @@ export default function InputClient({ roomId }: { roomId: string }) {
       unknownsText: existing?.unknownsText ?? unknownsText,
       careWindowDrafts: existing?.careWindowDrafts ?? careWindowDrafts,
       copayRate: existing?.copayRate ?? copayRate,
-      dirty: existing?.dirty ?? true,
+      dirty: nextDirty,
+      baseRevision: resolveNextDraftBaseRevision(existing, snapshot?.revision),
     });
+    setHasLocalDraft(nextDirty);
   };
 
-  const handleHopesChange = (value: string) => {
-    setHopesText(value);
+  const handleDiscardDraft = () => {
+    clearInputScreenDraft(roomId);
+    setHasLocalDraft(false);
+    setPendingNavigation(null);
+    setEditingDraft(null);
+    setEditingHope(null);
+    setEditingUnknown(null);
+    setEditingWindowGroup(null);
+    setMemo(isDemo ? demoFixture.documents.familyMemo : "");
+    setStructureNotice(null);
+    setStructureError(null);
+    setSaveError(null);
     setSavedRevision(null);
-    persistDraftState({ hopesText: value, dirty: true });
+    if (snapshot) {
+      applySnapshot(snapshot, true, isDemo);
+    } else {
+      setDrafts([]);
+      setHopesText("");
+      setUnknownsText("");
+      setCareWindowDrafts([]);
+      setCopayRate(1);
+    }
   };
 
-  const handleUnknownsChange = (value: string) => {
-    setUnknownsText(value);
+  const hopesList = linesToList(hopesText);
+  const unknownsList = linesToList(unknownsText);
+
+  const handleAddHope = (text: string) => {
+    const trimmed = text.trim();
+    if (!trimmed) return;
+    const nextText = listToLines([...linesToList(hopesText), trimmed]);
+    setHopesText(nextText);
+    persistDraftState({ hopesText: nextText, dirty: true });
     setSavedRevision(null);
-    persistDraftState({ unknownsText: value, dirty: true });
+  };
+
+  const handleStartEditHope = (index: number) => {
+    const list = linesToList(hopesText);
+    if (index < 0 || index >= list.length) return;
+    setEditingHope({ index, value: list[index] });
+  };
+
+  const handleSaveEditHope = (): boolean => {
+    if (!editingHope) return false;
+    const trimmed = editingHope.value.trim();
+    if (!trimmed) return false;
+    const nextList = linesToList(hopesText).map((item, i) =>
+      i === editingHope.index ? trimmed : item,
+    );
+    const nextText = listToLines(nextList);
+    setHopesText(nextText);
+    persistDraftState({ hopesText: nextText, dirty: true });
+    setEditingHope(null);
+    setSavedRevision(null);
+    return true;
+  };
+
+  const handleRemoveHope = (index: number) => {
+    const nextList = linesToList(hopesText).filter((_, i) => i !== index);
+    const nextText = listToLines(nextList);
+    setHopesText(nextText);
+    persistDraftState({ hopesText: nextText, dirty: true });
+    setEditingHope((prev) => {
+      if (!prev) return null;
+      if (prev.index === index) return null;
+      if (prev.index > index) return { ...prev, index: prev.index - 1 };
+      return prev;
+    });
+    setSavedRevision(null);
+  };
+
+  const handleAddUnknown = (text: string) => {
+    const trimmed = text.trim();
+    if (!trimmed) return;
+    const nextText = listToLines([...linesToList(unknownsText), trimmed]);
+    setUnknownsText(nextText);
+    persistDraftState({ unknownsText: nextText, dirty: true });
+    setSavedRevision(null);
+  };
+
+  const handleStartEditUnknown = (index: number) => {
+    const list = linesToList(unknownsText);
+    if (index < 0 || index >= list.length) return;
+    setEditingUnknown({ index, value: list[index] });
+  };
+
+  const handleSaveEditUnknown = (): boolean => {
+    if (!editingUnknown) return false;
+    const trimmed = editingUnknown.value.trim();
+    if (!trimmed) return false;
+    const nextList = linesToList(unknownsText).map((item, i) =>
+      i === editingUnknown.index ? trimmed : item,
+    );
+    const nextText = listToLines(nextList);
+    setUnknownsText(nextText);
+    persistDraftState({ unknownsText: nextText, dirty: true });
+    setEditingUnknown(null);
+    setSavedRevision(null);
+    return true;
+  };
+
+  const handleRemoveUnknown = (index: number) => {
+    const nextList = linesToList(unknownsText).filter((_, i) => i !== index);
+    const nextText = listToLines(nextList);
+    setUnknownsText(nextText);
+    persistDraftState({ unknownsText: nextText, dirty: true });
+    setEditingUnknown((prev) => {
+      if (!prev) return null;
+      if (prev.index === index) return null;
+      if (prev.index > index) return { ...prev, index: prev.index - 1 };
+      return prev;
+    });
+    setSavedRevision(null);
   };
 
   const handleCopayRateChange = (rate: CopayRate) => {
+    if (isTutorialActive) return;
     setCopayRate(rate);
     setSavedRevision(null);
     persistDraftState({ copayRate: rate, dirty: true });
   };
 
-  const toggleDayOpen = (day: DayIndex) => {
-    setOpenDays((prev) => ({ ...prev, [day]: !prev[day] }));
-  };
-
-  const handleAddCareWindowForDay = (day: DayIndex) => {
-    setOpenDays((prev) => ({ ...prev, [day]: true }));
-    setCareWindowDrafts((prev) => {
-      const next = [{ ...createEmptyCareWindowDraft(), day }, ...prev];
-      persistDraftState({ careWindowDrafts: next, dirty: true });
-      return next;
-    });
+  const handleChangeCareWindowDrafts = (next: CareWindowDraft[]) => {
+    if (isTutorialActive) return;
+    setCareWindowDrafts(next);
+    persistDraftState({ careWindowDrafts: next, dirty: true });
     setSavedRevision(null);
   };
 
-  const updateCareWindowDraft = (
-    id: string,
-    patch: Partial<Omit<CareWindowDraft, "id">>,
-  ) => {
-    if (patch.day !== undefined && patch.day !== "") {
-      const targetDay = patch.day;
-      setOpenDays((prev) => ({ ...prev, [targetDay]: true }));
+  const handleTutorialCareWindowsBulkAdd = (params: {
+    days: DayIndex[];
+    startHour: number;
+    endHour: number;
+    nextDrafts: CareWindowDraft[];
+  }): string | null => {
+    if (!hasWeekendDaysSelected(params.days)) {
+      return "「土日」ボタン、または「土」「日」の曜日を選んでから「＋ まとめて追加」を押してください。";
     }
-    setCareWindowDrafts((prev) => {
-      const updated = prev.map((w) => (w.id === id ? { ...w, ...patch } : w));
-      // 未入力行は一番上に残し、日時がすべて選ばれたら曜日・時刻順に並び替える
-      const sorted = sortCareWindowDrafts(updated);
-      persistDraftState({ careWindowDrafts: sorted, dirty: true });
-      return sorted;
-    });
-    setSavedRevision(null);
+    if (params.startHour !== 17 || params.endHour !== 21) {
+      return "時間帯を「17:00〜21:00」にしてから「＋ まとめて追加」を押してください。";
+    }
+    setTutorialStep(7);
+    return null;
   };
 
-  const removeCareWindowDraft = (id: string) => {
-    setCareWindowDrafts((prev) => {
-      const next = prev.filter((w) => w.id !== id);
-      persistDraftState({ careWindowDrafts: next, dirty: true });
-      return next;
-    });
-    setSavedRevision(null);
-  };
+  const effectiveHopesList =
+    editingHope && editingHope.value.trim() !== ""
+      ? hopesList.map((item, i) =>
+          i === editingHope.index ? editingHope.value.trim() : item,
+        )
+      : hopesList;
+  const effectiveUnknownsList =
+    editingUnknown && editingUnknown.value.trim() !== ""
+      ? unknownsList.map((item, i) =>
+          i === editingUnknown.index ? editingUnknown.value.trim() : item,
+        )
+      : unknownsList;
+  const editingWindowInvalid = editingWindowGroup
+    ? editingWindowGroup.slots.some(
+        (s) =>
+          !(
+            s.startHour >= BOARD_START_HOUR &&
+            s.startHour < s.endHour &&
+            s.endHour <= BOARD_END_HOUR
+          ),
+      )
+    : false;
+  const effectiveWindowDrafts =
+    editingWindowGroup && !editingWindowInvalid
+      ? replaceCareWindowsForDays(
+          careWindowDrafts,
+          editingWindowGroup.days,
+          editingWindowGroup.slots.map((s) => ({
+            startHour: s.startHour,
+            endHour: s.endHour,
+          })),
+        )
+      : careWindowDrafts;
 
-  const careWindowErrors = validateCareWindowDrafts(careWindowDrafts);
+  const careWindowErrors = validateCareWindowDrafts(effectiveWindowDrafts);
+  const separatedForValidation = separateDatelessHopes(
+    drafts,
+    effectiveHopesList,
+  );
+  const saveLimitErrors = validateInputSaveLimits({
+    drafts: separatedForValidation.drafts,
+    hopes: separatedForValidation.hopes,
+    unknowns: effectiveUnknownsList,
+    careWindows: toCareWindows(effectiveWindowDrafts),
+  });
 
   // 入力画面の保存を1つに統合（介護が必要な時間帯・自己負担割合・Geminiの整理をまとめて保存）
-  const handleSaveAll = async () => {
-    if (!snapshot) return;
-    setSavingAll(true);
+  const handleSaveAll = async (): Promise<boolean> => {
+    if (isTutorialActive) {
+      if (tutorialStep === 7) {
+        setTutorialSavedVisual(true);
+        setTutorialStep(8);
+        return true;
+      }
+      return false;
+    }
+    if (!snapshot || !canEdit) return false;
     setSaveError(null);
+    if (editingWindowInvalid) {
+      setSaveError(
+        "介護が必要な時間帯の開始時刻と終了時刻を確認してください。",
+      );
+      return false;
+    }
+    if (
+      !canSubmitStructure(drafts, snapshot.people) ||
+      careWindowErrors.length > 0
+    ) {
+      return false;
+    }
+    setSavingAll(true);
     try {
-      const token = await getIdToken();
-      const peopleNames = new Map(snapshot.people.map((p) => [p.id, p.name]));
-
       // 曜日・時刻がない希望があれば保存時にも「家族の希望」へ集約する
-      const separated = separateDatelessHopes(drafts, linesToList(hopesText));
+      const separated = separateDatelessHopes(drafts, effectiveHopesList);
       const finalDrafts = separated.drafts;
       const finalHopes = separated.hopes;
-      const finalUnknowns = linesToList(unknownsText);
-      const finalCareWindows = toCareWindows(careWindowDrafts);
+      const finalUnknowns = effectiveUnknownsList;
+      const finalCareWindows = toCareWindows(effectiveWindowDrafts);
+
+      const limitErrors = validateInputSaveLimits({
+        drafts: finalDrafts,
+        hopes: finalHopes,
+        unknowns: finalUnknowns,
+        careWindows: finalCareWindows,
+      });
+      if (limitErrors.length > 0) {
+        setSaveError(limitErrors[0]);
+        return false;
+      }
+
+      const baseRevision = resolveInputDraftSaveRevision(
+        getInputScreenDraft(roomId),
+        snapshot.revision,
+      );
+      const token = await getIdToken();
+      const peopleNames = new Map(snapshot.people.map((p) => [p.id, p.name]));
+      const savePayload = {
+        roomId,
+        baseRevision,
+        constraints: toStructureSaveConstraints(finalDrafts, peopleNames),
+        hopes: finalHopes,
+        unknowns: finalUnknowns,
+        careWindows: finalCareWindows,
+        copayRate,
+      };
+      // 保存APIと同じ形式を用意し、成功したときだけ下書き破棄の復元元にする。
+      const savedInput = bindStructureDrafts(savePayload, snapshot.people);
 
       const res = await fetch("/api/structure/save", {
         method: "POST",
@@ -690,15 +1018,7 @@ export default function InputClient({ roomId }: { roomId: string }) {
           "Content-Type": "application/json",
           Authorization: `Bearer ${token}`,
         },
-        body: JSON.stringify({
-          roomId,
-          baseRevision: snapshot.revision,
-          constraints: toStructureSaveConstraints(finalDrafts, peopleNames),
-          hopes: finalHopes,
-          unknowns: finalUnknowns,
-          careWindows: finalCareWindows,
-          copayRate,
-        }),
+        body: JSON.stringify(savePayload),
       });
       const data = (await res.json().catch(() => ({}))) as {
         error?: string;
@@ -708,358 +1028,500 @@ export default function InputClient({ roomId }: { roomId: string }) {
       if (!res.ok) {
         setSaveError(
           res.status === 409
-            ? "他の人が先に内容を更新しました（版が進んでいます）。再読み込みして、最新の内容で確認し直してください。"
+            ? "他の人が先に内容を更新しました。再読み込みして、最新の内容で確認し直してください。"
             : (data.message ?? "保存に失敗しました。内容を確認してください。"),
         );
-        return;
+        return false;
       }
 
       const nextRevision = data.revision ?? snapshot.revision + 1;
-      const nextHopesText = listToLines(finalHopes);
-      const nextWindowDrafts = careWindowDraftsFromWindows(finalCareWindows);
+      const nextHopesText = listToLines(savedInput.hopes);
+      const nextUnknownsText = listToLines(savedInput.unknowns);
+      const nextWindowDrafts = careWindowDraftsFromWindows(
+        savedInput.careWindows ?? finalCareWindows,
+      );
 
       // 保存で Gemini の整理が消えないよう、画面上の整理状態を維持したまま版と保存済み状態を更新する
       setDrafts(finalDrafts);
       setHopesText(nextHopesText);
+      setUnknownsText(nextUnknownsText);
       setCareWindowDrafts(nextWindowDrafts);
+      setEditingDraft(null);
+      setEditingHope(null);
+      setEditingUnknown(null);
+      setEditingWindowGroup(null);
       setSavedRevision(nextRevision);
       setSnapshot((prev) =>
-        prev
-          ? {
-              ...prev,
-              hopes: finalHopes,
-              unknowns: finalUnknowns,
-              careWindows: finalCareWindows,
-              copayRate,
-              revision: nextRevision,
-            }
-          : prev,
+        prev ? { ...prev, ...savedInput, revision: nextRevision } : prev,
       );
       saveInputScreenDraft(roomId, {
         memo,
         drafts: finalDrafts,
         hopesText: nextHopesText,
-        unknownsText,
+        unknownsText: nextUnknownsText,
         careWindowDrafts: nextWindowDrafts,
         copayRate,
         dirty: false,
+        baseRevision: nextRevision,
       });
-    } catch {
-      setSaveError("通信に失敗しました。もう一度お試しください。");
+      setHasLocalDraft(false);
+      setPendingNavigation(null);
+      return true;
+    } catch (err) {
+      if (err instanceof RevisionConflictError) {
+        setSaveError(
+          "他の人が先に内容を更新しました。再読み込みして、最新の内容で確認し直してください。",
+        );
+      } else if (
+        err instanceof DraftBaseRevisionMissingError ||
+        err instanceof AiApiError
+      ) {
+        setSaveError(err.message);
+      } else {
+        setSaveError("通信に失敗しました。もう一度お試しください。");
+      }
+      return false;
     } finally {
       setSavingAll(false);
     }
   };
 
+  const handleNavigateWithGuard = (
+    e: MouseEvent<HTMLElement>,
+    href: string,
+    placement: "header" | "footer" = "header",
+  ) => {
+    if (e.metaKey || e.ctrlKey || e.shiftKey || e.altKey || e.button !== 0) {
+      return;
+    }
+    if (!canEdit || !hasLocalDraft) {
+      return;
+    }
+    e.preventDefault();
+    setPendingNavigation({ href, placement });
+  };
+
+  const handleSaveAndProceed = async () => {
+    if (!pendingNavigation) return;
+    const targetHref = pendingNavigation.href;
+    const saved = await handleSaveAll();
+    if (saved) {
+      router.push(targetHref);
+    }
+  };
+
+  const handleProceedWithoutSaving = () => {
+    if (!pendingNavigation) return;
+    const targetHref = pendingNavigation.href;
+    setPendingNavigation(null);
+    router.push(targetHref);
+  };
+
+  const handleStayOnInput = () => {
+    setPendingNavigation(null);
+  };
+
+  const handleHeaderNavigate = (e: MouseEvent<HTMLElement>, href: string) => {
+    if (isTutorialActive && tutorialStep === 8 && href.endsWith("/board")) {
+      finishDemoTutorial();
+    }
+    handleNavigateWithGuard(e, href);
+  };
+  const warningHost = useRoomNavigationGuard(handleHeaderNavigate);
+
+  const renderUnsavedNavigationWarning = (placement: "header" | "footer") => {
+    if (!pendingNavigation || pendingNavigation.placement !== placement) {
+      return null;
+    }
+    const headingId = `unsaved-navigation-warning-${placement}`;
+    return (
+      <div
+        role="region"
+        aria-labelledby={headingId}
+        className="mt-3 flex flex-wrap items-center justify-between gap-3 rounded-xl border-2 border-amber-300 bg-amber-50 px-4 py-3 text-xs text-amber-950 shadow-xs"
+      >
+        <div>
+          <p id={headingId} className="font-bold flex items-center gap-1.5">
+            <span aria-hidden="true"><TriangleAlert className="ui-icon" aria-hidden="true" /></span>
+            <span>{scopeCopy.unsavedLeaveTitle}</span>
+          </p>
+          <p className="mt-0.5 text-amber-900">{scopeCopy.unsavedLeaveBody}</p>
+        </div>
+        <div className="flex flex-wrap items-center gap-2">
+          <button
+            type="button"
+            disabled={savingAll || !snapshot}
+            onClick={() => void handleSaveAndProceed()}
+            className="rounded-lg bg-[#65519A] px-3.5 py-1.5 font-bold text-white hover:bg-[#564385] disabled:opacity-40 transition-colors"
+          >
+            {savingAll ? "保存中…" : scopeCopy.unsavedLeaveSaveAndProceed}
+          </button>
+          <button
+            type="button"
+            disabled={savingAll}
+            onClick={handleProceedWithoutSaving}
+            className="rounded-lg border border-amber-300 bg-white px-3.5 py-1.5 font-bold text-amber-950 hover:bg-amber-100 disabled:opacity-40 transition-colors"
+          >
+            {scopeCopy.unsavedLeaveProceedWithoutSaving}
+          </button>
+          <button
+            type="button"
+            disabled={savingAll}
+            onClick={handleStayOnInput}
+            className="rounded-lg border border-[#E6DFD2] bg-white px-3.5 py-1.5 font-bold text-[#574468] hover:bg-[#F8F4EC] disabled:opacity-40 transition-colors"
+          >
+            {scopeCopy.unsavedLeaveStay}
+          </button>
+        </div>
+      </div>
+    );
+  };
+
   const removeFile = (fileIndex: number) => {
     setImageFiles((prev) => prev.filter((_, i) => i !== fileIndex));
+    setImageError(null);
   };
+
+  if (authError) {
+    return (
+      <div className="min-h-screen bg-[#F8F4EC] text-[#403346]">
+        <main className="mx-auto max-w-4xl px-6 py-12">
+          <h1 className="text-2xl font-bold">入力</h1>
+          <div
+            role="alert"
+            className="mt-4 rounded-xl border border-red-200 bg-red-50 p-5 text-sm text-red-800 space-y-3"
+          >
+            <p>{authError}</p>
+            <button
+              type="button"
+              onClick={retryAuth}
+              className="rounded-lg border border-red-300 bg-white px-4 py-2 text-xs font-bold text-red-800 hover:bg-red-100 transition-colors"
+            >
+              再試行
+            </button>
+          </div>
+        </main>
+      </div>
+    );
+  }
+
+  if (membershipError) {
+    return (
+      <div className="min-h-screen bg-[#F8F4EC] text-[#403346]">
+        <main className="mx-auto max-w-4xl px-6 py-12">
+          <h1 className="text-2xl font-bold">入力</h1>
+          <div
+            role="alert"
+            className="mt-4 rounded-xl border border-red-200 bg-red-50 p-5 text-sm text-red-800 space-y-3"
+          >
+            <p>{membershipError}</p>
+            <button
+              type="button"
+              onClick={() => void refresh()}
+              className="rounded-lg border border-red-300 bg-white px-4 py-2 text-xs font-bold text-red-800 hover:bg-red-100 transition-colors"
+            >
+              再試行
+            </button>
+          </div>
+        </main>
+      </div>
+    );
+  }
 
   if (user === null || membership === undefined) {
     return (
-      <main className="mx-auto max-w-4xl px-6 py-12">
-        <h1 className="text-2xl font-bold">入力</h1>
-        <p className="mt-4 text-neutral-600">読み込み中…</p>
-      </main>
+      <div className="min-h-screen bg-[#F8F4EC] text-[#403346]">
+        <main className="mx-auto max-w-4xl px-6 py-12">
+          <h1 className="text-2xl font-bold">入力</h1>
+          <p className="mt-4 text-[#574468]">読み込み中…</p>
+        </main>
+      </div>
     );
   }
 
   if (membership === null) {
     return (
-      <main className="mx-auto max-w-4xl px-6 py-12">
-        <h1 className="text-2xl font-bold">入力</h1>
-        <p className="mt-4 text-neutral-700">
-          このルームにはまだ参加していません。先にルームの入口から招待リンクで参加してください。
-        </p>
-        <p className="mt-4 text-sm">
-          <Link
-            className="underline font-bold text-indigo-600"
-            href={`/rooms/${roomId}`}
-          >
-            ルームの入口へ
-          </Link>
-        </p>
-      </main>
+      <div className="min-h-screen bg-[#F8F4EC] text-[#403346]">
+        <main className="mx-auto max-w-4xl px-6 py-12">
+          <h1 className="text-2xl font-bold">入力</h1>
+          <p className="mt-4 text-[#403346]">
+            このルームにはまだ参加していません。先にルームの入口から招待リンクで参加してください。
+          </p>
+          <p className="mt-4 text-sm">
+            <Link
+              className="underline font-bold text-[#65519A]"
+              href={`/rooms/${roomId}`}
+            >
+              ルームの入口へ
+            </Link>
+          </p>
+        </main>
+      </div>
     );
   }
 
-  const unbound = unboundDraftCount(drafts);
+  const unbound = unboundDraftCount(drafts, snapshot?.people);
+  const maskRightPanel = isTutorialActive && tutorialStep <= 3;
   const submittable =
-    canSubmitStructure(drafts) && careWindowErrors.length === 0;
-  const hopesCount = linesToList(hopesText).length;
-  const unknownsCount = linesToList(unknownsText).length;
-  const personNameMap = new Map(
-    (snapshot?.people ?? []).map((p) => [p.id, p.name]),
-  );
+    canSubmitStructure(drafts, snapshot?.people) &&
+    careWindowErrors.length === 0 &&
+    saveLimitErrors.length === 0;
 
   return (
-    <div className="min-h-screen bg-neutral-100/60 pb-16">
-      {/* 全画面共通ヘッダー */}
-      <RoomHeader roomId={roomId} activeKey="input" />
+    <div
+      data-testid="input-page-root"
+      className="min-h-screen bg-[#F8F4EC] text-[#403346] pb-16"
+    >
+      {warningHost && createPortal(renderUnsavedNavigationWarning("header"), warningHost)}
 
-      {/* 画面ヘッダーとステップ表示 */}
-      <div className="border-b border-neutral-200 bg-white px-4 sm:px-8 py-5 shadow-xs">
-        <div className="mx-auto max-w-7xl">
-          <div className="flex flex-wrap items-center justify-between gap-4">
-            <div>
-              <h1 className="text-2xl sm:text-3xl font-extrabold text-neutral-900">
-                まず、ご家族の事情を教えてください
-              </h1>
-            </div>
-
-            {/* 目標仕様：上部ステップ表示（1. 事情を入れる → 2. ボードで組む → 3. 確定・印刷） */}
-            <div className="flex flex-wrap items-center gap-3">
-              <nav aria-label="手続きの進行状況">
-                <ol className="flex items-center gap-2 text-xs sm:text-sm font-bold">
-                  <li className="flex items-center gap-1.5 rounded-full bg-indigo-600 px-3.5 py-1.5 text-white shadow-xs">
-                    <span>1. 事情を入れる</span>
-                  </li>
-                  <span className="text-neutral-300">→</span>
-                  <li className="flex items-center gap-1.5 rounded-full bg-neutral-100 px-3 py-1.5 text-neutral-600">
-                    <Link
-                      href={`/rooms/${roomId}/board`}
-                      className="hover:text-indigo-600"
-                    >
-                      2. ボードで組む
-                    </Link>
-                  </li>
-                  <span className="text-neutral-300">→</span>
-                  <li className="flex items-center gap-1.5 rounded-full bg-neutral-100 px-3 py-1.5 text-neutral-600">
-                    <Link
-                      href={`/rooms/${roomId}/summary`}
-                      className="hover:text-indigo-600"
-                    >
-                      3. 確定・印刷
-                    </Link>
-                  </li>
-                </ol>
-              </nav>
-              <Link
-                href={`/rooms/${roomId}/board`}
-                className="inline-flex items-center gap-1 rounded-xl bg-indigo-600 px-3.5 py-1.5 text-xs font-bold text-white shadow-xs hover:bg-indigo-700 transition-colors"
-              >
-                <span>次へ（週間ボードへ進む）</span>
-                <span>→</span>
-              </Link>
-            </div>
-          </div>
+      <div className="border-b border-[#E6DFD2] bg-white shadow-2xs">
+        <div className="room-header-row flex flex-col justify-center py-2">
+          <h1 className="text-2xl font-extrabold text-[#403346] sm:text-3xl">
+            まず、ご家族の事情を教えてください
+          </h1>
+          {isDemo && canEdit && snapshot && tutorialStep === null && (
+            <button
+              type="button"
+              onClick={startDemoTutorial}
+              disabled={savingAll || structuring || peopleSaving}
+              className="mt-1 self-start rounded py-2 text-sm font-semibold text-[#65519A] underline underline-offset-4 focus-visible:outline-2 focus-visible:outline-offset-2 disabled:opacity-50"
+            >
+              チュートリアルをもう一度見る
+            </button>
+          )}
 
           {!canEdit && (
             <p className="mt-3 rounded-lg border border-amber-300 bg-amber-50 px-4 py-2.5 text-xs font-semibold text-amber-900">
               ※ あなたの役割はケアマネ（閲覧のみ）のため、この画面での入力・保存はできません。入力の更新は家族だけが行えます。
             </p>
           )}
-          {loadError && <p className="mt-3 text-xs text-red-700">{loadError}</p>}
+          {loadError && (
+            <div
+              role="alert"
+              className="mt-3 flex flex-wrap items-center gap-3 text-xs text-red-700"
+            >
+              <span>{loadError}</span>
+              <button
+                type="button"
+                onClick={() => void refresh()}
+                className="rounded border border-red-300 bg-white px-2.5 py-1 font-bold text-red-700 hover:bg-red-50"
+              >
+                再試行
+              </button>
+            </div>
+          )}
         </div>
       </div>
 
       {/* メイン 2カラムレイアウト */}
-      <main className="mx-auto max-w-7xl px-4 sm:px-8 py-8">
-        <div className="grid grid-cols-1 lg:grid-cols-2 gap-8 items-start">
-          {/* ===================== 左カラム ===================== */}
-          <div className="space-y-6">
-            {/* 0. 登録されている家族カード */}
-            {snapshot && (
-              <section
-                aria-label="登録されている家族"
-                className="rounded-2xl border border-neutral-200 bg-white p-6 shadow-sm"
-              >
-                <div className="flex items-center justify-between border-b border-neutral-100 pb-3">
-                  <div className="flex items-center gap-2">
-                    <h2 className="text-base font-bold text-neutral-900 flex items-center gap-2">
-                      <span>👥</span>
-                      <span>登録されている家族</span>
-                    </h2>
-                    <span className="text-xs text-neutral-500">
-                      {snapshot.people.length}名
-                    </span>
-                  </div>
-                  {canEdit && !isEditingPeople && (
-                    <button
-                      type="button"
-                      className="rounded-lg border border-neutral-300 bg-white px-3 py-1 text-xs font-semibold text-neutral-700 hover:bg-neutral-50 transition-colors shadow-2xs"
-                      onClick={handleStartEditingPeople}
-                    >
-                      家族を追加・編集
-                    </button>
-                  )}
+      <main className="mx-auto max-w-[1440px] px-4 sm:px-6 lg:px-10 py-8">
+        {canEdit && hasLocalDraft && (
+          <div
+            role="status"
+            className="mb-6 flex flex-wrap items-center justify-between gap-3 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-xs text-amber-950"
+          >
+            <div>
+              <p className="font-bold">未保存の下書きがあります</p>
+              <p className="mt-0.5 text-amber-900">
+                {scopeCopy.localDraftNotice}
+              </p>
+            </div>
+            <button
+              type="button"
+              onClick={handleDiscardDraft}
+              className="rounded-lg border border-amber-300 bg-white px-3 py-1.5 font-bold text-amber-900 hover:bg-amber-100 transition-colors"
+            >
+              下書きを破棄する
+            </button>
+          </div>
+        )}
+        <div className="grid grid-cols-1 lg:grid-cols-2 lg:grid-rows-[auto_1fr] gap-x-8 gap-y-6 lg:gap-y-4 items-start">
+          {/* ===================== 右カラム先頭（モバイルでは先頭表示）：登録されている家族カード ===================== */}
+          {snapshot && (
+            <section
+              aria-label="登録されている家族"
+              className="lg:col-start-2 lg:row-start-1 rounded-2xl border border-[#E6DFD2] bg-white px-4 py-3 shadow-xs"
+            >
+              <div className="flex items-center justify-between border-b border-[#E6DFD2] pb-2">
+                <div className="flex items-center gap-2">
+                  <h2 className="text-sm font-bold text-[#403346] flex items-center gap-1.5">
+                    <span><Users className="ui-icon text-[#574468]" aria-hidden="true" /></span>
+                    <span>登録されている家族</span>
+                  </h2>
+                  <span className="text-xs text-[#574468]">
+                    {snapshot.people.length}名
+                  </span>
                 </div>
+                {canEdit && !isEditingPeople && (
+                  <button
+                    type="button"
+                    className="rounded-lg border border-[#E6DFD2] bg-white px-2.5 py-0.5 text-xs font-semibold text-[#65519A] hover:bg-[#EFEAF6] transition-colors"
+                    onClick={handleStartEditingPeople}
+                  >
+                    家族を追加・編集
+                  </button>
+                )}
+              </div>
 
-                {!isEditingPeople ? (
-                  <ul className="mt-4 divide-y divide-neutral-100">
-                    {snapshot.people.map((person) => {
-                      const role =
-                        person.careRole ??
-                        (person.canProvideCare ? "caregiver" : "recipient");
+              {!isEditingPeople ? (
+                <>
+                  <ul aria-label="家族一覧" className="mt-1.5 flex flex-wrap gap-1.5">
+                    {snapshot.people.map((person, index) => {
+                      const role = deriveCareRole(person, snapshot.people);
                       return (
                         <li
                           key={person.id}
-                          className="max-sm:flex-wrap max-sm:gap-2 flex items-center justify-between py-2 text-xs sm:text-sm first:pt-0 last:pb-0"
+                          title={CARE_ROLE_LABELS[role]}
+                          className="inline-flex max-w-full items-center gap-1 rounded-full border border-[#E6DFD2] bg-white py-0.5 pl-1 pr-2 text-xs"
                         >
-                          <div className="flex items-center gap-2.5">
-                            <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-neutral-100 font-bold text-lg text-neutral-700 shadow-2xs">
-                              {getPersonAvatarText(person)}
-                            </span>
-                            <span className="font-semibold text-neutral-800">
-                              {person.name}
-                            </span>
-                          </div>
-                          <span
-                            className={`rounded-md px-2.5 py-0.5 text-xs font-medium border ${
-                              role === "recipient"
-                                ? "bg-purple-50 text-purple-800 border-purple-200/60"
-                                : role === "caregiver"
-                                ? "bg-emerald-50 text-emerald-800 border-emerald-200/60"
-                                : "bg-neutral-100 text-neutral-600 border-neutral-200/60"
-                            }`}
-                          >
-                            {getPersonRoleLabel(person)}
+                          <MemberAvatar name={person.name} index={index} className="h-6 w-6 text-[10px]" />
+                          <span className="min-w-0 wrap-anywhere font-semibold text-[#403346]">
+                            {person.name}
                           </span>
+                          <FamilyRoleDot role={role} />
+                          <span className="sr-only">{CARE_ROLE_LABELS[role]}</span>
                         </li>
                       );
                     })}
                   </ul>
-                ) : (
-                  <div className="mt-4 space-y-4">
-                    <p className="text-xs text-neutral-600">
-                      名前・アイコン・区分（3択）を編集できます。介護を受ける人をちょうど1人、付き添いができる家族を1人以上指定してください。
-                    </p>
-                    <div className="space-y-3">
-                      {draftPeople.map((person) => (
-                        <div
-                          key={person.id}
-                          className="rounded-lg border border-neutral-200 bg-neutral-50/50 p-3 space-y-1.5"
-                        >
-                          <div className="flex flex-wrap items-center gap-2">
-                            <span
-                              aria-hidden="true"
-                              className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-white border border-neutral-200 font-bold text-lg text-neutral-700 shadow-2xs"
-                            >
-                              {getPersonAvatarText(person) || "？"}
-                            </span>
-                            <input
-                              className="w-36 sm:w-44 rounded border bg-white px-2.5 py-1.5 text-sm"
-                              placeholder="名前（例：父、長女）"
-                              value={person.name}
-                              onChange={(e) =>
-                                handleUpdatePerson(person.id, {
-                                  name: e.target.value,
-                                })
-                              }
-                            />
-                            <select
-                              aria-label="家族の区分"
-                              className="rounded border bg-white px-2.5 py-1.5 text-sm"
-                              value={
-                                person.careRole ??
-                                (person.canProvideCare
-                                  ? "caregiver"
-                                  : "recipient")
-                              }
-                              onChange={(e) =>
-                                handleUpdatePerson(person.id, {
-                                  careRole: e.target.value as CareRole,
-                                })
-                              }
-                            >
-                              <option value="recipient">介護を受ける人</option>
-                              <option value="caregiver">
-                                付き添いができる家族
-                              </option>
-                              <option value="family">
-                                付き添いはできない家族
-                              </option>
-                            </select>
-                            <button
-                              type="button"
-                              className="text-xs text-red-600 hover:text-red-800 font-medium ml-auto px-2 py-1"
-                              onClick={() => handleDeletePerson(person.id)}
-                            >
-                              削除
-                            </button>
-                          </div>
-                          <div className="pt-1">
-                            <span className="text-[11px] font-semibold text-neutral-500 mb-1 block">
-                              アイコンを選択：
-                            </span>
-                            <PersonIconPicker
-                              value={person.icon}
-                              onChange={(icon) =>
-                                handleUpdatePerson(person.id, { icon })
-                              }
-                            />
-                          </div>
-                          {peopleDeleteWarnings[person.id] && (
-                            <p className="text-xs text-red-600 font-medium">
-                              ⚠️ {peopleDeleteWarnings[person.id]}
-                            </p>
-                          )}
+                  <ul aria-label="役割の凡例" className="mt-1 flex flex-wrap gap-x-2 gap-y-0.5 text-[11px] leading-4 text-[#574468]">
+                    {(["recipient", "caregiver", "family"] as const).map((role) => (
+                      <li key={role} className="inline-flex items-center gap-1">
+                        <FamilyRoleDot role={role} />
+                        {CARE_ROLE_LABELS[role]}
+                      </li>
+                    ))}
+                  </ul>
+                </>
+              ) : (
+                <div className="mt-3 space-y-2.5">
+                  <p className="text-xs text-[#574468]">
+                    介護を受ける人をちょうど1人、付き添いができる家族を1人以上指定してください。
+                  </p>
+                  <div className="space-y-2">
+                    {draftPeople.map((person, index) => (
+                      <div
+                        key={person.id}
+                        className="rounded-lg border border-[#E6DFD2] bg-[#FAF7F1] p-2 space-y-1"
+                      >
+                        <div className="flex flex-wrap items-center gap-2">
+                          <MemberAvatar name={person.name} index={index} />
+                          <input
+                            className="w-36 sm:w-44 rounded border border-[#E6DFD2] bg-white px-2.5 py-1.5 text-sm text-[#403346] focus:border-[#65519A] focus:outline-hidden"
+                            placeholder="名前（例：父、長女）"
+                            value={person.name}
+                            onChange={(e) =>
+                              handleUpdatePerson(person.id, {
+                                name: e.target.value,
+                              })
+                            }
+                          />
+                          <select
+                            aria-label="家族の区分"
+                            className="rounded border border-[#E6DFD2] bg-white px-2.5 py-1.5 text-sm text-[#403346] focus:border-[#65519A] focus:outline-hidden"
+                            value={
+                              person.careRole ??
+                              (person.canProvideCare
+                                ? "caregiver"
+                                : "recipient")
+                            }
+                            onChange={(e) =>
+                              handleUpdatePerson(person.id, {
+                                careRole: e.target.value as CareRole,
+                              })
+                            }
+                          >
+                            <option value="recipient">介護を受ける人</option>
+                            <option value="caregiver">
+                              付き添いができる家族
+                            </option>
+                            <option value="family">
+                              付き添いはできない家族
+                            </option>
+                          </select>
+                          <button
+                            type="button"
+                            className="text-xs text-[#991b1b] hover:underline font-medium ml-auto px-2 py-1"
+                            onClick={() => handleDeletePerson(person.id)}
+                          >
+                            削除
+                          </button>
                         </div>
-                      ))}
-                    </div>
+                        {peopleDeleteWarnings[person.id] && (
+                          <p className="text-xs text-red-600 font-medium">
+                            <TriangleAlert className="ui-icon" aria-hidden="true" /> {peopleDeleteWarnings[person.id]}
+                          </p>
+                        )}
+                      </div>
+                    ))}
+                  </div>
 
+                  <button
+                    type="button"
+                    className="rounded border border-dashed border-[#E6DFD2] bg-white px-3 py-1.5 text-xs font-bold text-[#65519A] hover:bg-[#EFEAF6]"
+                    onClick={handleAddPerson}
+                  >
+                    ＋ 家族を追加
+                  </button>
+
+                  {peopleError && (
+                    <p className="text-xs text-red-700 font-semibold">
+                      {peopleError}
+                    </p>
+                  )}
+
+                  <div className="flex items-center justify-end gap-2 pt-2 border-t border-[#E6DFD2]">
                     <button
                       type="button"
-                      className="rounded border border-dashed border-neutral-300 px-3 py-1.5 text-xs font-medium text-neutral-700 hover:bg-neutral-50"
-                      onClick={handleAddPerson}
+                      className="rounded-lg border border-[#E6DFD2] bg-white px-3 py-1.5 text-xs font-semibold text-[#574468] hover:bg-[#F8F4EC] disabled:opacity-50"
+                      disabled={peopleSaving}
+                      onClick={handleCancelEditingPeople}
                     >
-                      ＋ 家族を追加
+                      キャンセル
                     </button>
-
-                    {peopleError && (
-                      <p className="text-xs text-red-700 font-semibold">
-                        {peopleError}
-                      </p>
-                    )}
-
-                    <div className="flex items-center justify-end gap-2 pt-2 border-t border-neutral-100">
-                      <button
-                        type="button"
-                        className="rounded-lg border border-neutral-300 px-3 py-1.5 text-xs font-semibold text-neutral-700 hover:bg-neutral-50 disabled:opacity-50"
-                        disabled={peopleSaving}
-                        onClick={handleCancelEditingPeople}
-                      >
-                        キャンセル
-                      </button>
-                      <button
-                        type="button"
-                        className="rounded-lg bg-indigo-600 px-4 py-1.5 text-xs font-bold text-white shadow-xs hover:bg-indigo-700 disabled:opacity-50"
-                        disabled={peopleSaving}
-                        onClick={() => void handleSavePeople()}
-                      >
-                        {peopleSaving ? "保存中…" : "変更を保存"}
-                      </button>
-                    </div>
+                    <button
+                      type="button"
+                      className="rounded-lg bg-[#65519A] px-4 py-1.5 text-xs font-bold text-white shadow-xs hover:bg-[#564385] disabled:opacity-50"
+                      disabled={peopleSaving}
+                      onClick={() => void handleSavePeople()}
+                    >
+                      {peopleSaving ? "保存中…" : "変更を保存"}
+                    </button>
                   </div>
-                )}
-              </section>
-            )}
+                </div>
+              )}
+            </section>
+          )}
+
+          {/* ===================== 左カラム ===================== */}
+          <div className="space-y-6 lg:col-start-1 lg:row-start-1 lg:row-span-2">
 
             {/* 1. 退院書類の写真アップロードカード */}
             <section
               aria-label="書類の写真アップロード"
-              className="rounded-2xl border border-neutral-200 bg-white p-6 shadow-sm"
+              data-tutorial-target="documents-section"
+              className="rounded-2xl border border-[#E6DFD2] bg-white p-6 shadow-xs"
             >
-              <div className="flex items-center justify-between border-b border-neutral-100 pb-3">
-                <h2 className="text-base font-bold text-neutral-900 flex items-center gap-2">
-                  <span>📷</span> 退院書類の写真
+              <div className="flex items-center justify-between border-b border-[#E6DFD2] pb-3">
+                <h2 className="text-base font-bold text-[#403346] flex items-center gap-2">
+                  <span><Camera className="ui-icon text-[#574468]" aria-hidden="true" /></span> 退院書類の写真
                 </h2>
-                <span className="text-xs text-neutral-500 font-medium">
+                <span className="text-xs text-[#574468] font-medium">
                   最大2枚（各5MBまで）
                 </span>
               </div>
 
-              <p className="mt-2 text-xs text-neutral-600 leading-relaxed">
-                退院時サマリーなどを読み取ります（写真は保存されません）。
+              <p className="mt-2 text-xs text-[#574468] leading-relaxed">
+                写真は保存されません。{isDemo && scopeCopy.beforeInput}
               </p>
 
               <div className="mt-4">
-                <label className="flex flex-col items-center justify-center rounded-xl border-2 border-dashed border-neutral-300 bg-neutral-50/70 p-6 text-center hover:bg-neutral-100/70 cursor-pointer transition-colors">
-                  <span className="text-3xl">📤</span>
-                  <span className="mt-2 text-xs font-bold text-indigo-700">
+                <label className="flex flex-col items-center justify-center rounded-xl border-2 border-dashed border-[#E6DFD2] bg-[#FAF7F1] p-6 text-center hover:bg-[#EFEAF6]/40 cursor-pointer transition-colors">
+                  <span className="text-3xl text-[#574468]"><Upload className="ui-icon" aria-hidden="true" /></span>
+                  <span className="mt-2 text-xs font-bold text-[#65519A]">
                     写真を選択またはドロップ
                   </span>
-                  <span className="mt-0.5 text-[11px] text-neutral-500">
+                  <span className="mt-0.5 text-[11px] text-[#574468]">
                     JPG, PNG, WebP対応
                   </span>
                   <input
@@ -1070,42 +1532,65 @@ export default function InputClient({ roomId }: { roomId: string }) {
                     className="hidden"
                     onChange={(e) => {
                       const files = Array.from(e.target.files ?? []);
-                      setImageFiles((prev) => [...prev, ...files].slice(0, 2));
                       e.target.value = "";
+                      if (!user || !canEdit || files.length === 0) return;
+                      const { acceptedIndices, errors } =
+                        validateStructureImageSelection(
+                          imageFiles.length,
+                          files,
+                        );
+                      if (acceptedIndices.length > 0) {
+                        const acceptedFiles = acceptedIndices.map(
+                          (idx) => files[idx],
+                        );
+                        setImageFiles((prev) => [...prev, ...acceptedFiles]);
+                      }
+                      setImageError(
+                        errors.length > 0 ? errors.join(" / ") : null,
+                      );
                     }}
                   />
                 </label>
               </div>
 
+              {imageError && (
+                <p
+                  role="alert"
+                  className="mt-3 rounded-lg border border-red-200 bg-red-50 p-2.5 text-xs font-medium text-red-700"
+                >
+                  {imageError}
+                </p>
+              )}
+
               {/* 選択したファイル名・状態・サムネイルプレビュー */}
               {imageFiles.length > 0 && (
                 <div className="mt-4 space-y-2">
-                  <h3 className="text-xs font-bold text-neutral-700">
+                  <h3 className="text-xs font-bold text-[#403346]">
                     選択中のファイル（{imageFiles.length} / 2枚）
                   </h3>
                   <ul className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                     {imageFiles.map((file, i) => (
                       <li
                         key={`${file.name}-${i}`}
-                        className="flex items-center gap-3 rounded-lg bg-neutral-50 p-2.5 text-xs border border-neutral-200"
+                        className="flex items-center gap-3 rounded-lg bg-[#FAF7F1] p-2.5 text-xs border border-[#E6DFD2]"
                       >
                         {imagePreviewUrls[i] && (
                           <img
                             src={imagePreviewUrls[i]}
                             alt={`${file.name}のプレビュー`}
                             data-testid="image-preview-thumbnail"
-                            className="h-16 w-16 shrink-0 rounded-md border border-neutral-200 bg-white object-cover"
+                            className="h-16 w-16 shrink-0 rounded-md border border-[#E6DFD2] bg-white object-cover"
                           />
                         )}
                         <div className="min-w-0 flex-1 space-y-1">
                           <div className="flex items-center gap-1.5 min-w-0">
-                            <span className="text-sm shrink-0">📄</span>
-                            <span className="font-medium text-neutral-800 truncate">
+                            <span className="text-sm shrink-0 text-[#574468]"><FileText className="ui-icon" aria-hidden="true" /></span>
+                            <span className="font-medium text-[#403346] truncate">
                               {file.name}
                             </span>
                           </div>
                           <div className="flex flex-wrap items-center gap-1.5">
-                            <span className="text-[10px] text-neutral-500 shrink-0">
+                            <span className="text-[10px] text-[#574468] shrink-0">
                               ({(file.size / 1024).toFixed(0)} KB)
                             </span>
                             <span className="rounded bg-emerald-100 px-1.5 py-0.2 text-[10px] font-bold text-emerald-800 shrink-0">
@@ -1115,7 +1600,7 @@ export default function InputClient({ roomId }: { roomId: string }) {
                               <button
                                 type="button"
                                 onClick={() => removeFile(i)}
-                                className="text-xs text-red-600 hover:underline font-bold shrink-0 ml-auto"
+                                className="text-xs text-[#991b1b] hover:underline font-bold shrink-0 ml-auto"
                               >
                                 削除
                               </button>
@@ -1132,39 +1617,45 @@ export default function InputClient({ roomId }: { roomId: string }) {
             {/* 2. 家族の事情メモの入力欄 */}
             <section
               aria-label="家族の事情メモ"
-              className="rounded-2xl border border-neutral-200 bg-white p-6 shadow-sm"
+              className="rounded-2xl border border-[#E6DFD2] bg-white p-6 shadow-xs"
             >
-              <div className="flex items-center justify-between border-b border-neutral-100 pb-3">
-                <h2 className="text-base font-bold text-neutral-900 flex items-center gap-2">
-                  <span>✍️</span> 家族の事情メモ
+              <div className="flex items-center justify-between border-b border-[#E6DFD2] pb-3">
+                <h2 className="text-base font-bold text-[#403346] flex items-center gap-2">
+                  <span><PenLine className="ui-icon text-[#574468]" aria-hidden="true" /></span> 家族の事情メモ
                 </h2>
-                <span className="text-xs text-neutral-500 font-mono">
+                <span className="text-xs text-[#574468] font-mono">
                   {memo.length} / 4,000字
                 </span>
               </div>
 
-              <p className="mt-2 text-xs text-neutral-600 leading-relaxed">
-                仕事の曜日・時間、付き添える時間帯、希望などを入力してください。
-              </p>
+              {isDemo && (
+                <p className="mt-2 text-xs text-[#574468] leading-relaxed">
+                  {scopeCopy.beforeInput}
+                </p>
+              )}
 
               <textarea
-                className="mt-3 w-full rounded-xl border border-neutral-300 p-3 text-xs leading-relaxed disabled:opacity-50 focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500"
+                className="mt-3 w-full rounded-xl border border-[#E6DFD2] bg-white p-3 text-xs leading-relaxed text-[#403346] disabled:opacity-50 focus:border-[#65519A] focus:ring-1 focus:ring-[#65519A] focus:outline-hidden"
                 rows={6}
                 maxLength={4000}
                 disabled={!canEdit}
+                data-tutorial-target="memo-section"
+                readOnly={isTutorialActive}
                 value={memo}
                 onChange={(e) => handleMemoChange(e.target.value)}
-                placeholder="例：父は来週退院予定で要介護3。長女は平日フルタイム勤務のため日中は対応不可。母は同居だが腰痛のため重い介助は困難。平日はデイサービスや訪問介護を利用したい…"
+                placeholder="例：父は来週退院予定で要介護3。長女は平日フルタイム勤務のため日中は対応不可。母は同居だが腰痛のため重い介助は困難。平日は通所介護や訪問介護を利用したい…"
               />
+              <div ref={memoGuideSlot} />
 
               <div className="mt-4 flex flex-wrap items-center justify-between gap-3">
                 <button
                   type="button"
-                  className="rounded-xl bg-gradient-to-r from-indigo-600 to-purple-600 px-5 py-2.5 text-xs font-bold text-white shadow-sm hover:from-indigo-700 hover:to-purple-700 disabled:opacity-50 transition-all flex items-center gap-2"
+                  data-tutorial-target="ai-structure-btn"
+                  className="rounded-xl bg-[#65519A] px-5 py-2.5 text-xs font-bold text-white shadow-xs hover:bg-[#564385] disabled:opacity-50 transition-colors flex items-center gap-2"
                   disabled={!canEdit || structuring}
                   onClick={handleStructure}
                 >
-                  <span>✨</span>
+                  <span><Sparkles className="ui-icon" aria-hidden="true" /></span>
                   <span>
                     {structuring
                       ? "事情メモから整理中…"
@@ -1172,7 +1663,7 @@ export default function InputClient({ roomId }: { roomId: string }) {
                   </span>
                 </button>
                 {structuring && (
-                  <span className="text-xs text-indigo-600 animate-pulse font-medium">
+                  <span className="text-xs text-[#65519A] animate-pulse font-medium">
                     文書とメモを読み取っています…
                   </span>
                 )}
@@ -1184,7 +1675,7 @@ export default function InputClient({ roomId }: { roomId: string }) {
                 </p>
               )}
               {structureNotice && (
-                <p className="mt-3 rounded-lg bg-sky-50 p-3 text-xs text-sky-900 font-medium border border-sky-200">
+                <p className="mt-3 rounded-lg border border-[#DDD4EC] bg-[#EFEAF6] p-3 text-xs font-medium text-[#403346]">
                   {structureNotice}
                 </p>
               )}
@@ -1193,679 +1684,183 @@ export default function InputClient({ roomId }: { roomId: string }) {
             {/* 3. 介護が必要な時間帯と自己負担割合の設定 */}
             <section
               aria-label="介護が必要な時間帯と自己負担割合の設定"
-              className="rounded-2xl border border-neutral-200 bg-white p-6 shadow-sm"
+              className="rounded-2xl border border-[#E6DFD2] bg-white p-6 shadow-xs"
             >
-              <div className="flex items-center justify-between border-b border-neutral-100 pb-3">
-                <h2 className="text-base font-bold text-neutral-900 flex items-center gap-2">
-                  <span>⚙️</span> 介護が必要な時間帯と自己負担割合
+              <div className="flex items-center justify-between border-b border-[#E6DFD2] pb-3">
+                <h2 className="text-base font-bold text-[#403346] flex items-center gap-2">
+                  <span><Settings className="ui-icon text-[#574468]" aria-hidden="true" /></span> 介護が必要な時間帯と自己負担割合
                 </h2>
               </div>
 
-              <p className="mt-2 text-xs text-neutral-600 leading-relaxed">
-                介護が必要な時間帯に予定がない箇所を「空白」と表示します。
+              <p className="mt-2 text-xs text-[#574468] leading-relaxed">
+                {scopeCopy.scheduleHours} {scopeCopy.gapScope}
               </p>
 
               {/* 自己負担割合 */}
-              <div className="mt-4 rounded-xl bg-neutral-50 p-4 border border-neutral-200">
+              <div
+                data-tutorial-target="copay-rate"
+                className="mt-4 rounded-xl bg-[#FAF7F1] p-4 border border-[#E6DFD2]"
+              >
                 <div className="flex flex-wrap items-center justify-between gap-2">
-                  <span className="text-xs font-bold text-neutral-800">
+                  <span className="text-xs font-bold text-[#403346]">
                     自己負担割合
                   </span>
                   <button
                     type="button"
                     aria-expanded={showCopayDetail}
                     onClick={() => setShowCopayDetail((prev) => !prev)}
-                    className="text-xs font-semibold text-indigo-600 hover:underline"
+                    className="text-xs font-semibold text-[#65519A] hover:underline"
                   >
                     {showCopayDetail ? "詳細を隠す ▲" : "所得による目安（詳細表示） ▼"}
                   </button>
                 </div>
-                <div className="mt-2 flex gap-4 text-xs font-medium">
-                  {([1, 2, 3] as CopayRate[]).map((rate) => (
-                    <label
-                      key={rate}
-                      className="flex items-center gap-1.5 cursor-pointer"
-                    >
-                      <input
-                        type="radio"
-                        name="copayRate"
-                        disabled={!canEdit}
-                        checked={copayRate === rate}
-                        onChange={() => handleCopayRateChange(rate)}
-                        className="text-indigo-600 focus:ring-indigo-500"
-                      />
-                      <span>{rate}割</span>
-                    </label>
-                  ))}
+                <div
+                  role="radiogroup"
+                  aria-label="自己負担割合"
+                  className="mt-2 inline-flex overflow-hidden rounded-lg border border-[#E6DFD2] bg-white text-xs font-bold"
+                >
+                  {([1, 2, 3] as CopayRate[]).map((rate, idx) => {
+                    const checked = copayRate === rate;
+                    return (
+                      <label
+                        key={rate}
+                        className={`cursor-pointer px-3.5 py-1.5 transition-colors focus-within:outline-2 focus-within:outline-[#65519A] focus-within:-outline-offset-2 ${
+                          idx > 0 ? "border-l border-[#E6DFD2]" : ""
+                        } ${
+                          checked
+                            ? "bg-[#65519A] text-white"
+                            : "bg-white text-[#574468] hover:bg-[#F8F4EC]"
+                        } ${!canEdit ? "opacity-50 cursor-not-allowed" : ""}`}
+                      >
+                        <input
+                          type="radio"
+                          name="copayRate"
+                          disabled={!canEdit}
+                          checked={checked}
+                          onClick={(e) => {
+                            if (isTutorialActive) e.preventDefault();
+                          }}
+                          onChange={() => handleCopayRateChange(rate)}
+                          className="sr-only"
+                        />
+                        <span>{rate}割</span>
+                      </label>
+                    );
+                  })}
                 </div>
                 {showCopayDetail && (
-                  <p className="mt-2.5 rounded-lg bg-white p-2.5 text-[11px] text-neutral-600 border border-neutral-200 leading-relaxed">
+                  <p className="mt-2.5 rounded-lg bg-white p-2.5 text-[11px] text-[#574468] border border-[#E6DFD2] leading-relaxed">
                     所得による目安：一般的な所得の方は1割、一定以上の所得がある方は2割・3割です（介護保険負担割合証で確認できます）。
                   </p>
                 )}
               </div>
 
               {/* careWindows（介護が必要な時間帯） */}
-              <div className="mt-4">
-                <div className="flex items-center justify-between">
-                  <span className="text-xs font-bold text-neutral-800">
-                    介護が必要な時間帯
-                  </span>
-                </div>
-
-                <div className="mt-2 space-y-2">
-                  {ALL_DAYS.map((day) => {
-                    const label = DAY_LABELS[day];
-                    const dayDrafts = careWindowDrafts.filter(
-                      (w) => (w.day === "" ? 0 : w.day) === day,
-                    );
-                    const isOpen = openDays[day];
-
-                    return (
-                      <div
-                        key={day}
-                        data-testid={`care-window-day-${day}`}
-                        className="rounded-xl border border-neutral-200 bg-white overflow-hidden"
-                      >
-                        <div className="flex items-center justify-between gap-2 bg-neutral-50/80 px-3 py-2">
-                          <h3 className="text-xs font-bold text-neutral-800">
-                            <button
-                              type="button"
-                              aria-expanded={isOpen}
-                              onClick={() => toggleDayOpen(day)}
-                              className="flex items-center gap-2 text-left text-xs font-bold text-neutral-800 hover:text-indigo-600 transition-colors"
-                            >
-                              <span
-                                aria-hidden="true"
-                                className="text-[10px] text-neutral-500"
-                              >
-                                {isOpen ? "▼" : "▶"}
-                              </span>
-                              <span>{`${label}曜日（${dayDrafts.length}件）`}</span>
-                            </button>
-                          </h3>
-                          {canEdit && dayDrafts.length === 0 && (
-                            <button
-                              type="button"
-                              onClick={() => handleAddCareWindowForDay(day)}
-                              className="text-xs font-bold text-indigo-600 hover:underline"
-                            >
-                              <span aria-hidden="true">＋ </span>
-                              <span>時間帯を追加</span>
-                            </button>
-                          )}
-                        </div>
-
-                        {isOpen && (
-                          <div className="border-t border-neutral-200">
-                            {dayDrafts.length > 0 ? (
-                              <div className="divide-y divide-neutral-100">
-                                {dayDrafts.map((windowDraft) => {
-                                  const isIncomplete =
-                                    windowDraft.startHour === "" ||
-                                    windowDraft.endHour === "";
-                                  return (
-                                    <div
-                                      key={windowDraft.id}
-                                      data-testid="care-window-row"
-                                      className={`flex items-center gap-2 px-3 py-1.5 text-xs ${
-                                        isIncomplete
-                                          ? "bg-indigo-50/60"
-                                          : "bg-white"
-                                      }`}
-                                    >
-                                      {isIncomplete && (
-                                        <span className="shrink-0 rounded bg-indigo-600 px-1.5 py-0.5 text-[10px] font-bold text-white">
-                                          未入力
-                                        </span>
-                                      )}
-                                      <select
-                                        aria-label="介護が必要な開始時刻"
-                                        className="rounded border border-neutral-300 bg-white px-2 py-1 text-xs focus:border-indigo-500 focus:outline-hidden"
-                                        disabled={!canEdit}
-                                        value={windowDraft.startHour}
-                                        onChange={(e) =>
-                                          updateCareWindowDraft(windowDraft.id, {
-                                            startHour:
-                                              e.target.value === ""
-                                                ? ""
-                                                : Number(e.target.value),
-                                          })
-                                        }
-                                      >
-                                        <option value="">開始時刻</option>
-                                        {WINDOW_START_HOURS.map((hour) => (
-                                          <option key={hour} value={hour}>
-                                            {hour}:00
-                                          </option>
-                                        ))}
-                                      </select>
-                                      <span className="text-neutral-400">〜</span>
-                                      <select
-                                        aria-label="介護が必要な終了時刻"
-                                        className="rounded border border-neutral-300 bg-white px-2 py-1 text-xs focus:border-indigo-500 focus:outline-hidden"
-                                        disabled={!canEdit}
-                                        value={windowDraft.endHour}
-                                        onChange={(e) =>
-                                          updateCareWindowDraft(windowDraft.id, {
-                                            endHour:
-                                              e.target.value === ""
-                                                ? ""
-                                                : Number(e.target.value),
-                                          })
-                                        }
-                                      >
-                                        <option value="">終了時刻</option>
-                                        {WINDOW_END_HOURS.map((hour) => (
-                                          <option key={hour} value={hour}>
-                                            {hour}:00
-                                          </option>
-                                        ))}
-                                      </select>
-                                      {canEdit && (
-                                        <button
-                                          type="button"
-                                          className="ml-auto shrink-0 text-xs text-red-600 hover:underline font-medium"
-                                          onClick={() =>
-                                            removeCareWindowDraft(windowDraft.id)
-                                          }
-                                        >
-                                          削除
-                                        </button>
-                                      )}
-                                    </div>
-                                  );
-                                })}
-                              </div>
-                            ) : (
-                              <p className="text-xs text-neutral-500 px-3 py-2">
-                                この曜日の時間帯はまだありません。
-                              </p>
-                            )}
-                            {canEdit && dayDrafts.length > 0 && (
-                              <div className="border-t border-neutral-100 bg-neutral-50/40 px-3 py-1.5">
-                                <button
-                                  type="button"
-                                  onClick={() => handleAddCareWindowForDay(day)}
-                                  className="text-xs font-bold text-indigo-600 hover:underline"
-                                >
-                                  <span aria-hidden="true">＋ </span>
-                                  <span>時間帯を追加</span>
-                                </button>
-                              </div>
-                            )}
-                          </div>
-                        )}
-                      </div>
-                    );
-                  })}
-                  {careWindowDrafts.length === 0 && (
-                    <p className="text-xs text-amber-700 font-medium p-2 bg-amber-50 rounded-lg">
-                      介護が必要な時間帯が未設定です。未設定のままだと空白時間が未判定になります。
-                    </p>
-                  )}
-                </div>
-              </div>
-
-              {careWindowErrors.length > 0 && (
-                <ul className="mt-3 list-disc pl-5 text-xs text-red-700 space-y-0.5">
-                  {careWindowErrors.map((err) => (
-                    <li key={err}>{err}</li>
-                  ))}
-                </ul>
-              )}
+              <CareWindowsSection
+                careWindowDrafts={careWindowDrafts}
+                canEdit={canEdit && (!isTutorialActive || tutorialStep === 6)}
+                editingGroup={isTutorialActive ? null : editingWindowGroup}
+                onChangeEditingGroup={setEditingWindowGroup}
+                onChangeCareWindowDrafts={handleChangeCareWindowDrafts}
+                careWindowErrors={careWindowErrors}
+                hiddenDays={
+                  isTutorialActive && tutorialStep <= 5 ? [5, 6] : undefined
+                }
+                hiddenSlots={
+                  isTutorialActive && tutorialStep === 6
+                    ? DEMO_TUTORIAL_HIDDEN_WEEKEND_EVENING_SLOTS
+                    : undefined
+                }
+                tutorialMode={isTutorialActive && tutorialStep === 6}
+                onTutorialBulkAdd={
+                  isTutorialActive && tutorialStep === 6
+                    ? handleTutorialCareWindowsBulkAdd
+                    : undefined
+                }
+              />
             </section>
           </div>
 
           {/* ===================== 右カラム（Geminiの整理パネル） ===================== */}
-          <div className="space-y-6">
-            <section
-              aria-label="Geminiの整理"
-              className="rounded-2xl border border-neutral-200 bg-white p-6 shadow-sm"
+          <div className={`space-y-6 lg:col-start-2 ${snapshot ? "lg:row-start-2" : "lg:row-start-1"}`}>
+            <GeminiReviewPanel
+              drafts={maskRightPanel ? [] : drafts}
+              hopes={maskRightPanel ? [] : hopesList}
+              unknowns={maskRightPanel ? [] : unknownsList}
+              people={snapshot?.people ?? []}
+              canEdit={canEdit && !isTutorialActive}
+              editingDraftIndex={editingDraft?.index ?? null}
+              onStartEditDraft={startEditDraft}
+              onFinishEditDraft={finishEditDraft}
+              onCancelEditDraft={cancelEditDraft}
+              onAddDraft={addDraft}
+              onUpdateDraft={updateDraft}
+              onToggleDraftDay={toggleDraftDay}
+              onRemoveDraft={removeDraft}
+              editingHope={editingHope}
+              onStartEditHope={handleStartEditHope}
+              onChangeEditingHope={(value) =>
+                setEditingHope((prev) => (prev ? { ...prev, value } : prev))
+              }
+              onSaveEditHope={handleSaveEditHope}
+              onCancelEditHope={() => setEditingHope(null)}
+              onAddHope={handleAddHope}
+              onRemoveHope={handleRemoveHope}
+              editingUnknown={editingUnknown}
+              onStartEditUnknown={handleStartEditUnknown}
+              onChangeEditingUnknown={(value) =>
+                setEditingUnknown((prev) => (prev ? { ...prev, value } : prev))
+              }
+              onSaveEditUnknown={handleSaveEditUnknown}
+              onCancelEditUnknown={() => setEditingUnknown(null)}
+              onAddUnknown={handleAddUnknown}
+              onRemoveUnknown={handleRemoveUnknown}
             >
-              <div className="flex flex-wrap items-center justify-between gap-2 border-b border-neutral-100 pb-3">
-                <div className="flex items-center gap-2">
-                  <span className="flex h-7 w-7 items-center justify-center rounded-lg bg-gradient-to-tr from-purple-600 to-indigo-600 text-white font-black text-xs">
-                    ✦
-                  </span>
-                  <h2 className="text-base font-bold text-neutral-900">
-                    Geminiの整理
-                  </h2>
-                </div>
-
-                <div className="flex items-center gap-2">
-                  {unbound > 0 ? (
-                    <span className="rounded-full bg-red-100 px-2.5 py-0.5 text-xs font-bold text-red-800">
-                      未選択: {unbound}件
-                    </span>
-                  ) : (
-                    <span className="rounded-full bg-emerald-100 px-2.5 py-0.5 text-xs font-bold text-emerald-800">
-                      全条件結びつけ完了
-                    </span>
-                  )}
-
-                  {/* 簡易／詳細の切り替え */}
-                  <div
-                    role="group"
-                    aria-label="Geminiの整理の表示切り替え"
-                    className="inline-flex rounded-lg border border-neutral-200 bg-neutral-100 p-0.5 text-xs font-bold"
-                  >
-                    <button
-                      type="button"
-                      aria-pressed={viewMode === "simple"}
-                      onClick={() => setViewMode("simple")}
-                      className={`rounded-md px-2.5 py-1 transition-colors ${
-                        viewMode === "simple"
-                          ? "bg-white text-indigo-700 shadow-2xs"
-                          : "text-neutral-600 hover:text-neutral-900"
-                      }`}
-                    >
-                      簡易
-                    </button>
-                    <button
-                      type="button"
-                      aria-pressed={viewMode === "detailed"}
-                      onClick={() => setViewMode("detailed")}
-                      className={`rounded-md px-2.5 py-1 transition-colors ${
-                        viewMode === "detailed"
-                          ? "bg-white text-indigo-700 shadow-2xs"
-                          : "text-neutral-600 hover:text-neutral-900"
-                      }`}
-                    >
-                      詳細
-                    </button>
-                  </div>
-                </div>
-              </div>
-
-              <div
-                role="note"
-                className="mt-3 flex items-center gap-2.5 rounded-xl border-2 border-indigo-300 bg-indigo-50 px-3.5 py-2.5 text-xs font-bold text-indigo-950 shadow-2xs"
-              >
-                <span className="shrink-0 rounded bg-indigo-600 px-1.5 py-0.5 text-[10px] font-black text-white">
-                  必須ステップ
-                </span>
-                <p>対象の家族を選び、内容を確認して保存してください。</p>
-              </div>
-
-              {viewMode === "simple" ? (
-                /* ===================== 簡易表示モード（詳細を隠す） ===================== */
-                <div
-                  data-testid="gemini-simple-view"
-                  className="mt-4 rounded-xl border border-neutral-200 bg-neutral-50 p-4 space-y-3"
-                >
-                  <div className="flex flex-wrap items-center gap-2 text-xs font-bold text-neutral-700">
-                    <span className="rounded-lg bg-white px-3 py-1.5 border border-neutral-200">
-                      条件カード：{drafts.length}件
-                    </span>
-                    <span className="rounded-lg bg-white px-3 py-1.5 border border-neutral-200">
-                      家族の希望：{hopesCount}件
-                    </span>
-                    <span className="rounded-lg bg-white px-3 py-1.5 border border-neutral-200">
-                      分からないこと：{unknownsCount}件
-                    </span>
-                  </div>
-
-                  {drafts.length > 0 ? (
-                    <ul className="space-y-1.5 text-xs text-neutral-800">
-                      {drafts.map((draft, i) => {
-                        const config =
-                          TYPE_CONFIG[draft.type] ?? TYPE_CONFIG.other;
-                        const personName =
-                          personNameMap.get(draft.personId) ?? "（対象未選択）";
-                        const dayText =
-                          draft.days.length > 0
-                            ? draft.days.map((d) => DAY_LABELS[d]).join("・")
-                            : "";
-                        const timeText =
-                          draft.startHour !== undefined &&
-                          draft.endHour !== undefined
-                            ? `${draft.startHour}:00〜${draft.endHour}:00`
-                            : "";
-                        return (
-                          <li
-                            key={i}
-                            className="flex flex-wrap items-center gap-2 rounded-lg bg-white px-3 py-2 border border-neutral-200"
-                          >
-                            <span
-                              className={`rounded px-2 py-0.5 text-[11px] font-bold ${config.badge}`}
-                            >
-                              {config.label}
-                            </span>
-                            <span className="font-bold text-neutral-900">
-                              {personName}
-                            </span>
-                            <span className="text-neutral-700">
-                              {draft.detail || "（内容未入力）"}
-                            </span>
-                            {(dayText || timeText) && (
-                              <span className="ml-auto text-[11px] text-neutral-500 font-mono">
-                                {[dayText, timeText].filter(Boolean).join(" ")}
-                              </span>
-                            )}
-                          </li>
-                        );
-                      })}
-                    </ul>
-                  ) : (
-                    <p className="text-xs text-neutral-500">
-                      登録されている条件カードはありません。
-                    </p>
-                  )}
-
-                  <div className="pt-1">
-                    <button
-                      type="button"
-                      onClick={() => setViewMode("detailed")}
-                      className="text-xs font-bold text-indigo-600 hover:underline"
-                    >
-                      詳細を表示して編集する →
-                    </button>
-                  </div>
-                </div>
-              ) : (
-                /* ===================== 詳細表示モード ===================== */
-                <div data-testid="gemini-detailed-view">
-                  {/* 制約カード一覧 */}
-                  <div className="mt-4 space-y-3">
-                    {drafts.map((draft, index) => {
-                      const errors = validateReviewDraft(draft);
-                      const timed = draft.type === "unavailable";
-                      const config =
-                        TYPE_CONFIG[draft.type] ?? TYPE_CONFIG.other;
-
-                      return (
-                        <div
-                          key={index}
-                          data-testid="constraint-card"
-                          className={`rounded-xl border border-neutral-200 bg-white p-4 shadow-xs border-l-4 ${config.border} transition-all`}
-                        >
-                          {/* 上段：種別バッジ（重なり防止で単一表示）＋対象者ドロップダウン */}
-                          <div className="flex flex-wrap items-center justify-between gap-2 border-b border-neutral-100 pb-2.5">
-                            <div className="flex items-center gap-2">
-                              {canEdit ? (
-                                <select
-                                  aria-label="条件の種別"
-                                  className={`rounded-md px-2.5 py-1 text-xs font-bold ${config.badge}`}
-                                  value={draft.type}
-                                  onChange={(e) =>
-                                    updateDraft(index, {
-                                      type: e.target.value as ConstraintType,
-                                    })
-                                  }
-                                >
-                                  {(
-                                    Object.keys(TYPE_CONFIG) as ConstraintType[]
-                                  ).map((t) => (
-                                    <option key={t} value={t}>
-                                      {TYPE_CONFIG[t].label}
-                                    </option>
-                                  ))}
-                                </select>
-                              ) : (
-                                <span
-                                  className={`rounded-md px-2.5 py-1 text-xs font-bold ${config.badge}`}
-                                >
-                                  {config.label}
-                                </span>
-                              )}
-                            </div>
-
-                            <div className="flex items-center gap-2">
-                              <label className="text-xs font-bold text-neutral-700">
-                                対象:
-                              </label>
-                              <select
-                                aria-label="対象の家族"
-                                className={`rounded border px-2 py-1 text-xs font-bold ${
-                                  draft.personId === ""
-                                    ? "border-red-400 bg-red-50 text-red-900"
-                                    : "border-neutral-300 bg-white text-neutral-800"
-                                }`}
-                                disabled={!canEdit}
-                                value={draft.personId}
-                                onChange={(e) =>
-                                  updateDraft(index, {
-                                    personId: e.target.value,
-                                  })
-                                }
-                              >
-                                <option value="">家族を選択…</option>
-                                {snapshot?.people.map((person) => (
-                                  <option key={person.id} value={person.id}>
-                                    {person.name} ({getPersonRoleLabel(person)})
-                                  </option>
-                                ))}
-                              </select>
-                            </div>
-                          </div>
-
-                          {/* 本文（内容） */}
-                          <div className="mt-2.5">
-                            <label className="text-[11px] font-bold text-neutral-600">
-                              内容
-                            </label>
-                            <input
-                              type="text"
-                              className="mt-1 w-full rounded-lg border border-neutral-300 px-3 py-1.5 text-xs text-neutral-900 disabled:opacity-50"
-                              disabled={!canEdit}
-                              maxLength={500}
-                              value={draft.detail}
-                              onChange={(e) =>
-                                updateDraft(index, { detail: e.target.value })
-                              }
-                              placeholder="事情・条件の詳しい内容"
-                            />
-                          </div>
-
-                          {/* 曜日選択 */}
-                          <div className="mt-2.5">
-                            <span className="text-[11px] font-bold text-neutral-600">
-                              該当曜日
-                            </span>
-                            <div className="mt-1 flex flex-wrap gap-1.5">
-                              {DAY_LABELS.map((label, day) => {
-                                const checked = draft.days.includes(
-                                  day as DayIndex,
-                                );
-                                return (
-                                  <button
-                                    key={day}
-                                    type="button"
-                                    disabled={!canEdit}
-                                    onClick={() =>
-                                      toggleDraftDay(index, day as DayIndex)
-                                    }
-                                    className={`rounded px-2 py-0.5 text-xs font-semibold transition-all ${
-                                      checked
-                                        ? "bg-indigo-600 text-white"
-                                        : "bg-neutral-100 text-neutral-600 hover:bg-neutral-200"
-                                    }`}
-                                  >
-                                    {label}
-                                  </button>
-                                );
-                              })}
-                            </div>
-                          </div>
-
-                          {/* 時刻設定＋曜日・時刻必須ラベル＋右端にゴミ箱アイコン削除ボタン */}
-                          <div className="mt-2.5 flex flex-wrap items-center gap-2 text-xs">
-                            <span className="text-[11px] font-bold text-neutral-600">
-                              時刻:
-                            </span>
-                            <select
-                              aria-label="条件の開始時刻"
-                              className="rounded border border-neutral-300 bg-white px-2 py-1 text-xs"
-                              disabled={!canEdit}
-                              value={draft.startHour ?? ""}
-                              onChange={(e) =>
-                                updateDraft(index, {
-                                  startHour:
-                                    e.target.value === ""
-                                      ? undefined
-                                      : Number(e.target.value),
-                                })
-                              }
-                            >
-                              <option value="">指定なし</option>
-                              {CONSTRAINT_START_HOURS.map((hour) => (
-                                <option key={hour} value={hour}>
-                                  {hour}:00
-                                </option>
-                              ))}
-                            </select>
-                            <span className="text-neutral-400">〜</span>
-                            <select
-                              aria-label="条件の終了時刻"
-                              className="rounded border border-neutral-300 bg-white px-2 py-1 text-xs"
-                              disabled={!canEdit}
-                              value={draft.endHour ?? ""}
-                              onChange={(e) =>
-                                updateDraft(index, {
-                                  endHour:
-                                    e.target.value === ""
-                                      ? undefined
-                                      : Number(e.target.value),
-                                })
-                              }
-                            >
-                              <option value="">指定なし</option>
-                              {CONSTRAINT_END_HOURS.map((hour) => (
-                                <option key={hour} value={hour}>
-                                  {hour}:00
-                                </option>
-                              ))}
-                            </select>
-                            {timed && (
-                              <span className="text-[10px] text-amber-700 font-medium">
-                                ※曜日と時刻が必須
-                              </span>
-                            )}
-                            {canEdit && (
-                              <button
-                                type="button"
-                                aria-label="この条件を削除"
-                                title="この条件を削除"
-                                className="ml-auto inline-flex items-center justify-center rounded-md p-1.5 text-neutral-400 hover:bg-red-50 hover:text-red-600 transition-colors"
-                                onClick={() => removeDraft(index)}
-                              >
-                                <svg
-                                  xmlns="http://www.w3.org/2000/svg"
-                                  viewBox="0 0 20 20"
-                                  fill="currentColor"
-                                  className="h-4 w-4"
-                                  aria-hidden="true"
-                                >
-                                  <path
-                                    fillRule="evenodd"
-                                    d="M8.75 1A2.75 2.75 0 006 3.75v.443c-.795.077-1.584.176-2.365.298a.75.75 0 10.23 1.482l.149-.022.841 10.518A2.75 2.75 0 007.596 19h4.807a2.75 2.75 0 002.742-2.53l.841-10.52.149.023a.75.75 0 00.23-1.482A41.03 41.03 0 0014 4.193V3.75A2.75 2.75 0 0011.25 1h-2.5zM10 4c.84 0 1.673.025 2.5.075V3.75c0-.69-.56-1.25-1.25-1.25h-2.5c-.69 0-1.25.56-1.25 1.25v.325C8.327 4.025 9.16 4 10 4zM8.58 7.72a.75.75 0 00-1.5.06l.3 7.5a.75.75 0 101.5-.06l-.3-7.5zm4.34.06a.75.75 0 10-1.5-.06l-.3 7.5a.75.75 0 101.5.06l.3-7.5z"
-                                    clipRule="evenodd"
-                                  />
-                                </svg>
-                              </button>
-                            )}
-                          </div>
-
-                          {errors.length > 0 && (
-                            <ul className="mt-2 list-disc pl-4 text-[11px] text-red-600 space-y-0.5">
-                              {errors.map((err) => (
-                                <li key={err}>{err}</li>
-                              ))}
-                            </ul>
-                          )}
-                        </div>
-                      );
-                    })}
-
-                    {drafts.length === 0 && (
-                      <p className="rounded-xl border border-dashed border-neutral-300 p-6 text-center text-xs text-neutral-500">
-                        条件はまだありません。左のAIボタンまたは下のボタンから追加してください。
-                      </p>
-                    )}
-                  </div>
-
-                  {canEdit && (
-                    <button
-                      type="button"
-                      className="mt-3 rounded-lg border border-neutral-300 bg-white px-3.5 py-1.5 text-xs font-bold text-neutral-700 hover:bg-neutral-50 shadow-xs"
-                      onClick={addDraft}
-                    >
-                      ＋ 条件を追加する
-                    </button>
-                  )}
-
-                  {/* 家族の希望（縦幅を広く） */}
-                  <div className="mt-6 border-t border-neutral-100 pt-4">
-                    <label
-                      htmlFor="family-hopes-textarea"
-                      className="text-xs font-bold text-neutral-800 block"
-                    >
-                      家族の希望（自由記述・1行に1件）
-                    </label>
-                    <textarea
-                      id="family-hopes-textarea"
-                      className="mt-1.5 w-full min-h-36 resize-y rounded-xl border border-neutral-300 p-3 text-xs leading-relaxed disabled:opacity-50"
-                      rows={6}
-                      disabled={!canEdit}
-                      value={hopesText}
-                      onChange={(e) => handleHopesChange(e.target.value)}
-                      placeholder="例：週末はできるだけ家族で過ごしたい&#10;入浴はプロの手を借りたい"
-                    />
-                  </div>
-
-                  {/* 「分からないこと」は破線枠のボックスに一覧表示 */}
-                  <div className="mt-6 rounded-2xl border-2 border-dashed border-amber-300 bg-amber-50/60 p-5">
-                    <div className="flex items-center gap-2">
-                      <span className="text-lg">❓</span>
-                      <h3 className="text-xs font-bold text-amber-950">
-                        分からないこと・書かれていないこと
-                      </h3>
-                    </div>
-                    <p className="mt-1 text-[11px] text-amber-900 leading-relaxed">
-                      面談で確認したい項目を残します（1行に1件）。
-                    </p>
-                    <textarea
-                      aria-label="分からないこと・書かれていないこと"
-                      className="mt-2.5 w-full rounded-xl border border-amber-300 bg-white p-3 text-xs leading-relaxed text-amber-950 disabled:opacity-50"
-                      rows={3}
-                      disabled={!canEdit}
-                      value={unknownsText}
-                      onChange={(e) => handleUnknownsChange(e.target.value)}
-                      placeholder="例：退院後の薬の管理方法は誰が確認するか未定&#10;デイサービスの送迎ルートに入れるか事業所に未確認"
-                    />
-                  </div>
-                </div>
-              )}
-
               {/* 保存エラー・完了・統合アクションボタン */}
-              {unbound > 0 && (
+              {!maskRightPanel && unbound > 0 && (
                 <p className="mt-4 rounded bg-amber-50 p-2 text-xs font-bold text-amber-800 border border-amber-200">
-                  ⚠️ 対象の家族が未選択の条件が {unbound} 件あります。すべて選択するまで保存できません。
+                  <TriangleAlert className="ui-icon" aria-hidden="true" /> 対象の家族が未選択の条件が {unbound} 件あります。すべて選択するまで保存できません。
                 </p>
               )}
               {careWindowErrors.length > 0 && (
                 <p className="mt-4 rounded bg-amber-50 p-2 text-xs font-bold text-amber-800 border border-amber-200">
-                  ⚠️ 介護が必要な時間帯に未入力または不正な行があります。確認してから保存してください。
+                  <TriangleAlert className="ui-icon" aria-hidden="true" /> 介護が必要な時間帯に未入力または不正な行があります。確認してから保存してください。
                 </p>
+              )}
+              {saveLimitErrors.length > 0 && (
+                <div
+                  role="alert"
+                  className="mt-4 rounded bg-red-50 p-3 text-xs font-bold text-red-700 border border-red-200 space-y-1"
+                >
+                  <p><TriangleAlert className="ui-icon" aria-hidden="true" /> 保存上限を超えている項目があります。内容を減らしてから保存してください。</p>
+                  <ul className="list-disc pl-5 font-medium space-y-0.5">
+                    {saveLimitErrors.map((err) => (
+                      <li key={err}>{err}</li>
+                    ))}
+                  </ul>
+                </div>
               )}
               {saveError && (
                 <p className="mt-4 rounded bg-red-50 p-2 text-xs font-bold text-red-700 border border-red-200">
                   {saveError}
                 </p>
               )}
-              {savedRevision !== null && (
+              {(savedRevision !== null ||
+                (isTutorialActive && tutorialSavedVisual)) && (
                 <p className="mt-4 rounded bg-emerald-50 p-2.5 text-xs font-bold text-emerald-800 border border-emerald-200">
-                  ✓ 条件・時間帯・負担割合をまとめて保存しました（新しい版：{savedRevision}）。
+                  ✓ 条件・時間帯・負担割合をまとめて保存しました。
                 </p>
               )}
 
-              <div className="mt-5 flex flex-wrap items-center justify-between gap-3 border-t border-neutral-100 pt-4">
+              {renderUnsavedNavigationWarning("footer")}
+
+              <div className="mt-5 flex flex-wrap items-center justify-between gap-3 border-t border-[#E6DFD2] pt-4">
                 <button
                   type="button"
-                  className="rounded-xl bg-neutral-900 px-6 py-2.5 text-xs font-bold text-white hover:bg-neutral-800 disabled:opacity-40 shadow-sm"
-                  disabled={!canEdit || !submittable || savingAll || !snapshot}
-                  onClick={handleSaveAll}
+                  data-tutorial-target="save-btn"
+                  className="rounded-xl border border-[#65519A] bg-white px-6 py-2.5 text-xs font-bold text-[#65519A] hover:bg-[#EFEAF6] disabled:opacity-40 transition-colors"
+                  disabled={!canEdit || (!isTutorialActive && !submittable) || savingAll || !snapshot}
+                  onClick={() => void handleSaveAll()}
                 >
                   {savingAll
                     ? "保存中…"
@@ -1873,16 +1868,46 @@ export default function InputClient({ roomId }: { roomId: string }) {
                 </button>
                 <Link
                   href={`/rooms/${roomId}/board`}
-                  className="rounded-xl bg-indigo-600 px-5 py-2.5 text-xs font-bold text-white shadow-xs hover:bg-indigo-700 flex items-center gap-1"
+                  data-tutorial-target="board-link"
+                  onClick={(e) => {
+                    if (isTutorialActive && tutorialStep === 8) {
+                      finishDemoTutorial();
+                    }
+                    handleNavigateWithGuard(
+                      e,
+                      `/rooms/${roomId}/board`,
+                      "footer",
+                    );
+                  }}
+                  className="rounded-xl bg-[#65519A] px-5 py-2.5 text-xs font-bold text-white hover:bg-[#574468] flex items-center gap-1 shadow-xs transition-colors"
                 >
                   <span>次へ（週間ボードへ進む）</span>
                   <span>→</span>
                 </Link>
               </div>
-            </section>
+            </GeminiReviewPanel>
           </div>
         </div>
       </main>
+
+      {isTutorialActive && tutorialStep !== null && (
+        <DemoInputTutorial
+          step={tutorialStep}
+          memoGuideSlot={memoGuideSlot.current}
+          onNext={() => {
+            if (tutorialStep === 1) {
+              setTutorialStep(2);
+            } else if (tutorialStep === 2) {
+              setTutorialStep(3);
+            } else if (tutorialStep === 4) {
+              setTutorialStep(5);
+            } else if (tutorialStep === 5) {
+              setTutorialStep(6);
+            }
+          }}
+          onClose={finishDemoTutorial}
+        />
+      )}
     </div>
   );
 }
