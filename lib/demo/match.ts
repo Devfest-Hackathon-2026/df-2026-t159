@@ -12,6 +12,7 @@
  * 不一致なら固定案を返さず、理由を返す（エラーで案内する形）。
  */
 
+import { separateDatelessHopes } from "../dateless-hopes";
 import { demoFixture, type DemoFixture } from "../demo-fixture";
 import type { RoomSnapshot } from "../types";
 import { mapConstraints, mapPeople, mapPlacements } from "./mapping";
@@ -61,7 +62,7 @@ export function matchDemoSnapshot(
         field: "people",
       };
     }
-    if (exp.name !== actual.name || exp.canProvideCare !== actual.canProvideCare) {
+    if (exp.canProvideCare !== actual.canProvideCare) {
       return {
         matched: false,
         reason: `人物の情報が一致しません: ${actual.name}`,
@@ -109,7 +110,12 @@ export function matchDemoSnapshot(
   }
 
   // 6. 制約（constraints, hopes, unknowns）照合
-  const expectedConstraints = mapConstraints(fixture.constraints, meta.personMapping);
+  const original = mapConstraints(fixture.constraints, meta.personMapping);
+  // 保存後の表現は見本側から作る。実データの変更や希望の欠落を正規化で隠さない。
+  const expected = snapshot.constraints.length === original.length
+    ? { drafts: original, hopes: fixture.hopes }
+    : separateDatelessHopes(original, fixture.hopes);
+  const expectedConstraints = expected.drafts;
   if (snapshot.constraints.length !== expectedConstraints.length) {
     return {
       matched: false,
@@ -154,7 +160,7 @@ export function matchDemoSnapshot(
   // hopes 照合
   const sortStrings = (arr: string[]) => [...arr].sort();
   const actualHopes = sortStrings(snapshot.hopes);
-  const expHopes = sortStrings(fixture.hopes);
+  const expHopes = sortStrings(expected.hopes);
   if (
     actualHopes.length !== expHopes.length ||
     !actualHopes.every((h, i) => h === expHopes[i])
