@@ -11,13 +11,13 @@
  * - 白いカード、角丸、紫のアクセントに揃えたUIデザイン
  */
 
-import { doc, getDocFromServer } from "firebase/firestore";
+import { Check, Copy, FlaskConical, Mail, TriangleAlert, Users } from "lucide-react";
+import { doc, getDocFromServer, onSnapshot } from "firebase/firestore";
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
 import { useCallback, useEffect, useState } from "react";
 import CommentPanel from "@/components/CommentPanel";
-import RoomHeader from "@/components/RoomHeader";
-import { getIdToken, useAnonymousUser } from "@/lib/auth";
+import { getIdToken, useAnonymousAuth } from "@/lib/auth";
 import {
   resetDemoRoomClient,
   seedDemoTroubledPlanClient,
@@ -26,18 +26,20 @@ import { db } from "@/lib/firebase";
 import { listComments, postComment } from "@/lib/plan/client";
 import {
   canDeletePerson,
-  getPersonAvatarText,
   getPersonRoleLabel,
   normalizePeople,
   validatePeopleCareRoles,
 } from "@/lib/people";
-import PersonIconPicker from "@/components/PersonIconPicker";
+import MemberAvatar from "@/components/MemberAvatar";
 import { saveRecentRoom } from "@/lib/recent-rooms";
+import { resolveRoomDisplayName } from "@/lib/room-display-name";
 import {
   commitRoomChange,
   readOwnMembership,
   readRoomSnapshot,
 } from "@/lib/rooms";
+import { scopeCopy } from "@/lib/scope-copy";
+import { clearInputScreenDraft } from "@/lib/structure-review";
 import {
   firestorePaths,
   type CareRole,
@@ -53,8 +55,6 @@ import {
 const JOIN_ERROR_MESSAGES: Record<string, string> = {
   invite_not_found:
     "招待リンクが正しくありません。リンクを発行した人に確認してください。",
-  invite_already_used:
-    "この招待リンクは使用済みです。新しいリンクを発行してもらってください。",
   invite_expired:
     "この招待リンクは期限切れです（有効期間は24時間）。新しいリンクを発行してもらってください。",
   invalid_token: "招待リンクが正しくありません。",
@@ -62,11 +62,15 @@ const JOIN_ERROR_MESSAGES: Record<string, string> = {
 
 const ROLE_LABELS: Record<MemberRole, string> = {
   family: "家族（プランを編集できます）",
-  careManager: "ケアマネ（閲覧とコメントのみ）",
+  careManager: "ケアマネージャー（閲覧・コメントできます）",
 };
 
 export default function RoomHomeClient({ roomId }: { roomId: string }) {
-  const user = useAnonymousUser();
+  const {
+    user,
+    error: authError,
+    retry: retryAuth,
+  } = useAnonymousAuth();
   const searchParams = useSearchParams();
   const router = useRouter();
   const inviteToken = searchParams.get("invite");
@@ -74,16 +78,33 @@ export default function RoomHomeClient({ roomId }: { roomId: string }) {
   const [membership, setMembership] = useState<MemberDoc | null | undefined>(
     undefined,
   );
+  const [membershipError, setMembershipError] = useState<string | null>(null);
   const [snapshot, setSnapshot] = useState<RoomSnapshot | null>(null);
   const [snapshotLoaded, setSnapshotLoaded] = useState(false);
-  const [confirmedRevision, setConfirmedRevision] = useState<number | null>(
-    null,
-  );
+  const [currentRevision, setCurrentRevision] = useState<number>();
+  const [confirmedRevision, setConfirmedRevision] = useState<number | null>();
+  const [statusError, setStatusError] = useState(false);
+  const hasMembership = Boolean(membership);
+  useEffect(() => {
+    if (!hasMembership) return;
+    setCurrentRevision(undefined);
+    setConfirmedRevision(undefined);
+    setStatusError(false);
+    const failed = () => setStatusError(true);
+    const stopRoom = onSnapshot(doc(db, firestorePaths.room(roomId)), room => {
+      setCurrentRevision(room.data()?.revision);
+    }, failed);
+    const stopSummary = onSnapshot(doc(db, firestorePaths.summary(roomId)), summary => {
+      setConfirmedRevision(summary.exists() ? (summary.data() as SummaryDoc).confirmedRevision : null);
+    }, failed);
+    return () => { stopRoom(); stopSummary(); };
+  }, [roomId, hasMembership]);
   const [joining, setJoining] = useState(false);
   const [joinError, setJoinError] = useState<string | null>(null);
   const [inviteUrls, setInviteUrls] = useState<
     Partial<Record<MemberRole, string>>
   >({});
+  const [copiedUrl, setCopiedUrl] = useState<string | null>(null);
   const [inviteError, setInviteError] = useState<string | null>(null);
   const [comments, setComments] = useState<RoomComment[]>([]);
   const [isDemo, setIsDemo] = useState(false);
@@ -101,7 +122,14 @@ export default function RoomHomeClient({ roomId }: { roomId: string }) {
 
   const refresh = useCallback(async () => {
     if (!user) return;
-    const member = await readOwnMembership(roomId, user.uid);
+    setMembershipError(null);
+    let member: MemberDoc | null;
+    try {
+      member = await readOwnMembership(roomId, user.uid);
+    } catch {
+      setMembershipError(scopeCopy.membershipLoadFailed);
+      return;
+    }
     setMembership(member);
     if (member) {
       let currentSnapshot: RoomSnapshot | null = null;
@@ -119,42 +147,27 @@ export default function RoomHomeClient({ roomId }: { roomId: string }) {
         setComments([]);
       }
       let currentIsDemo = false;
+      let currentRoomName: string | undefined;
       try {
         const roomSnap = await getDocFromServer(
           doc(db, firestorePaths.room(roomId)),
         );
-        currentIsDemo = roomSnap.exists()
-          ? ((roomSnap.data() as RoomDoc).isDemo ?? false)
-          : false;
+        if (roomSnap.exists()) {
+          const roomData = roomSnap.data() as RoomDoc;
+          currentIsDemo = roomData.isDemo ?? false;
+          currentRoomName = roomData.name;
+        }
         setIsDemo(currentIsDemo);
       } catch {
         setIsDemo(false);
       }
-      try {
-        const summarySnap = await getDocFromServer(
-          doc(db, firestorePaths.summary(roomId)),
-        );
-        setConfirmedRevision(
-          summarySnap.exists()
-            ? (summarySnap.data() as SummaryDoc).confirmedRevision
-            : null,
-        );
-      } catch {
-        setConfirmedRevision(null);
-      }
-
       // 最近アクセスしたルームを端末に記録（Issue #73）
       if (currentSnapshot) {
-        const recipient = currentSnapshot.people.find(
-          (p) => p.careRole === "recipient",
-        );
-        const roomName = currentIsDemo
-          ? "デモルーム（佐藤家）"
-          : recipient?.name
-          ? `${recipient.name}のルーム`
-          : currentSnapshot.people[0]?.name
-          ? `${currentSnapshot.people[0].name}のルーム`
-          : "ルーム";
+        const roomName = resolveRoomDisplayName({
+          name: currentRoomName,
+          isDemo: currentIsDemo,
+          people: currentSnapshot.people,
+        });
         saveRecentRoom({ roomId, roomName });
       }
     }
@@ -222,6 +235,17 @@ export default function RoomHomeClient({ roomId }: { roomId: string }) {
     }
   };
 
+  const copyInvite = async (url: string) => {
+    setInviteError(null);
+    setCopiedUrl(null);
+    try {
+      await navigator.clipboard.writeText(url);
+      setCopiedUrl(url);
+    } catch {
+      setInviteError("コピーできませんでした。リンクを選択して手動でコピーしてください。");
+    }
+  };
+
   const handleSubmitComment = async (body: string) => {
     await postComment(roomId, body);
     setComments(await listComments(roomId));
@@ -256,6 +280,7 @@ export default function RoomHomeClient({ roomId }: { roomId: string }) {
     try {
       const token = await getIdToken();
       await resetDemoRoomClient(token, roomId);
+      clearInputScreenDraft(roomId);
       setDemoMessage("デモルームを初期状態に戻しました。");
       await refresh();
     } catch (err) {
@@ -340,12 +365,13 @@ export default function RoomHomeClient({ roomId }: { roomId: string }) {
     setPeopleError(null);
     try {
       const normalized = normalizePeople(
-        draftPeople.map((p) => ({
+        draftPeople.map((p, index) => ({
           id: p.id,
           name: p.name.trim(),
           canProvideCare: p.careRole === "caregiver",
           careRole: p.careRole,
           icon: p.icon,
+          order: index,
         })),
       );
       await commitRoomChange(roomId, snapshot.revision, {
@@ -367,7 +393,7 @@ export default function RoomHomeClient({ roomId }: { roomId: string }) {
     snapshot &&
       confirmedRevision !== null &&
       confirmedRevision !== undefined &&
-      confirmedRevision === snapshot.revision,
+      confirmedRevision === currentRevision,
   );
   const hasPlacements = Boolean(
     snapshot && snapshot.placements && snapshot.placements.length > 0,
@@ -377,7 +403,8 @@ export default function RoomHomeClient({ roomId }: { roomId: string }) {
       ((snapshot.constraints && snapshot.constraints.length > 0) ||
         (snapshot.hopes && snapshot.hopes.length > 0) ||
         (snapshot.unknowns && snapshot.unknowns.length > 0) ||
-        (snapshot.careWindows && snapshot.careWindows.length > 0)),
+        // 作成時に登録できる介護時間帯だけでは、事情入力を終えたとはみなさない。
+        (snapshot.revision > 0 && snapshot.careWindows.length > 0)),
   );
 
   let nextAction: {
@@ -402,11 +429,11 @@ export default function RoomHomeClient({ roomId }: { roomId: string }) {
   } else if (hasPlacements) {
     nextAction = {
       step: 2,
-      title: "代替案を見て、プランを決める",
+      title: "週間ボードでプランの続きを編集する",
       description:
-        "週間ボードで予定が組まれています。枠オーバーや空白時間がないか検証し、代替案を確認してプランを決めましょう。",
-      buttonText: "代替案を見て、プランを決める",
-      href: `/rooms/${roomId}/proposals`,
+        "保存した予定を確認・調整し、内容が決まったらプランを確定しましょう。",
+      buttonText: "週間ボードを再開する",
+      href: `/rooms/${roomId}/board`,
       badgeText: "配置あり・未確定",
     };
   } else if (hasInputs) {
@@ -414,7 +441,7 @@ export default function RoomHomeClient({ roomId }: { roomId: string }) {
       step: 2,
       title: "週間ボードで予定を組む",
       description:
-        "ご家族の事情が入力されました。デイサービスや訪問介護、付き添いなどの予定を週間ボードで配置しましょう。",
+        "ご家族の事情が入力されました。通所介護や訪問介護、付き添いなどの予定を週間ボードで配置しましょう。",
       buttonText: "週間ボードで予定を組む",
       href: `/rooms/${roomId}/board`,
       badgeText: "入力済み・配置なし",
@@ -432,11 +459,9 @@ export default function RoomHomeClient({ roomId }: { roomId: string }) {
   }
 
   return (
-    <div className="mobile-page min-h-screen bg-neutral-100/60 pb-16">
-      {/* 全画面共通ヘッダー */}
-      <RoomHeader roomId={roomId} activeKey="top" />
+    <div className="mobile-page min-h-screen pb-16">
 
-      <main className="mx-auto max-w-4xl px-4 sm:px-6 py-8">
+      <main className="mx-auto max-w-4xl px-4 sm:px-6 lg:px-10 py-8">
         <div className="flex flex-wrap items-baseline justify-between gap-2 border-b border-neutral-200/80 pb-4">
           <div>
             <h1 className="text-2xl sm:text-3xl font-extrabold tracking-tight text-neutral-900">
@@ -448,11 +473,44 @@ export default function RoomHomeClient({ roomId }: { roomId: string }) {
               <span className="inline-flex items-center rounded-full bg-indigo-50 px-3 py-1 text-xs font-semibold text-indigo-700 border border-indigo-200/60">
                 {ROLE_LABELS[membership.role]}
               </span>
+              {inviteToken && membership.role === "family" && (
+                <p className="mt-2 text-xs text-neutral-600">
+                  このブラウザーでは家族として参加済みです。ケアマネージャーとして試すには、別のブラウザーかシークレットウィンドウでケアマネ用リンクを開いてください。
+                </p>
+              )}
             </div>
           )}
         </div>
 
-        {user === null || membership === undefined ? (
+        {authError ? (
+          <div
+            role="alert"
+            className="mt-8 rounded-xl border border-red-200 bg-red-50 p-6 text-sm text-red-800 space-y-3"
+          >
+            <p>{authError}</p>
+            <button
+              type="button"
+              onClick={retryAuth}
+              className="rounded-lg border border-red-300 bg-white px-4 py-2 text-xs font-bold text-red-800 hover:bg-red-100 transition-colors"
+            >
+              再試行
+            </button>
+          </div>
+        ) : membershipError ? (
+          <div
+            role="alert"
+            className="mt-8 rounded-xl border border-red-200 bg-red-50 p-6 text-sm text-red-800 space-y-3"
+          >
+            <p>{membershipError}</p>
+            <button
+              type="button"
+              onClick={() => void refresh()}
+              className="rounded-lg border border-red-300 bg-white px-4 py-2 text-xs font-bold text-red-800 hover:bg-red-100 transition-colors"
+            >
+              再試行
+            </button>
+          </div>
+        ) : user === null || membership === undefined ? (
           <div className="mt-8 rounded-xl border border-neutral-200 bg-white p-8 text-center text-sm text-neutral-500 shadow-sm">
             読み込み中…
           </div>
@@ -478,7 +536,7 @@ export default function RoomHomeClient({ roomId }: { roomId: string }) {
                   <p className="mt-3 text-sm text-red-700">{joinError}</p>
                 )}
                 <p className="mt-3 text-xs text-neutral-500">
-                  招待の有効期間は24時間で、1回だけ使えます。role（家族／ケアマネ）は招待した側の設定で決まります。
+                  招待リンクは発行から24時間有効です。参加する役割は、家族用・ケアマネ用のどちらのリンクかで決まります。
                 </p>
               </div>
             ) : (
@@ -490,17 +548,17 @@ export default function RoomHomeClient({ roomId }: { roomId: string }) {
         ) : (
           <div className="mt-6 space-y-6">
             {/* ルームトップの上部：「次にやること」案内カード ＋ 手順全体の小さなステップ表示 */}
-            {!snapshotLoaded ? (
+            {statusError || !snapshotLoaded || currentRevision === undefined || confirmedRevision === undefined ? (
               <div
                 aria-label="読み込み中"
-                className="rounded-2xl border border-neutral-200/80 bg-white/70 p-6 shadow-xs text-center text-xs text-neutral-400"
+                className="rounded-2xl border border-neutral-200/80 bg-white p-6 shadow-xs text-center text-xs text-neutral-400"
               >
-                読み込み中…
+                {statusError ? "確定状態を取得できませんでした。再読み込みしてください。" : "読み込み中…"}
               </div>
             ) : (
               <section
                 aria-label="次にやること"
-                className="rounded-2xl border border-indigo-100 bg-gradient-to-br from-white via-white to-indigo-50/40 p-6 shadow-sm"
+                className="rounded-2xl border border-neutral-200 bg-white p-6 shadow-sm"
               >
                 {/* 手順全体が分かる小さなステップ表示 */}
                 <div className="flex flex-wrap items-center justify-between gap-3 border-b border-indigo-100/70 pb-4">
@@ -582,7 +640,7 @@ export default function RoomHomeClient({ roomId }: { roomId: string }) {
                 <div className="flex items-center justify-between border-b border-neutral-100 pb-3">
                   <div className="flex items-center gap-2">
                     <h2 className="text-base font-bold text-neutral-900 flex items-center gap-2">
-                      <span>👥</span>
+                      <span><Users className="ui-icon" aria-hidden="true" /></span>
                       <span>登録されている家族</span>
                     </h2>
                     <span className="text-xs text-neutral-500">
@@ -602,7 +660,7 @@ export default function RoomHomeClient({ roomId }: { roomId: string }) {
 
                 {!isEditingPeople ? (
                   <ul className="mt-4 divide-y divide-neutral-100">
-                    {snapshot.people.map((person) => {
+                    {snapshot.people.map((person, index) => {
                       const role = person.careRole ?? (person.canProvideCare ? "caregiver" : "recipient");
                       return (
                         <li
@@ -610,9 +668,7 @@ export default function RoomHomeClient({ roomId }: { roomId: string }) {
                           className="max-sm:flex-wrap max-sm:gap-2 flex items-center justify-between py-2.5 text-sm first:pt-0 last:pb-0"
                         >
                           <div className="flex items-center gap-2.5">
-                            <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-neutral-100 font-bold text-lg text-neutral-700 shadow-2xs">
-                              {getPersonAvatarText(person)}
-                            </span>
+                            <MemberAvatar name={person.name} index={index} />
                             <span className="font-semibold text-neutral-800">
                               {person.name}
                             </span>
@@ -638,18 +694,13 @@ export default function RoomHomeClient({ roomId }: { roomId: string }) {
                       名前や区分（3択）を編集できます。介護を受ける人をちょうど1人、付き添いができる家族を1人以上指定してください。
                     </p>
                     <div className="space-y-3">
-                      {draftPeople.map((person) => (
+                      {draftPeople.map((person, index) => (
                         <div
                           key={person.id}
                           className="rounded-lg border border-neutral-200 bg-neutral-50/50 p-3 space-y-1.5"
                         >
                           <div className="flex flex-wrap items-center gap-2">
-                            <span
-                              aria-hidden="true"
-                              className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-white border border-neutral-200 font-bold text-lg text-neutral-700 shadow-2xs"
-                            >
-                              {getPersonAvatarText(person) || "？"}
-                            </span>
+                            <MemberAvatar name={person.name} index={index} />
                             <input
                               className="w-36 sm:w-44 rounded border bg-white px-2.5 py-1.5 text-sm"
                               placeholder="名前（例：父、長女）"
@@ -682,20 +733,9 @@ export default function RoomHomeClient({ roomId }: { roomId: string }) {
                               削除
                             </button>
                           </div>
-                          <div className="pt-1">
-                            <span className="text-[11px] font-semibold text-neutral-500 mb-1 block">
-                              アイコンを選択：
-                            </span>
-                            <PersonIconPicker
-                              value={person.icon}
-                              onChange={(icon) =>
-                                handleUpdatePerson(person.id, { icon })
-                              }
-                            />
-                          </div>
                           {peopleDeleteWarnings[person.id] && (
                             <p className="text-xs text-red-600 font-medium">
-                              ⚠️ {peopleDeleteWarnings[person.id]}
+                              <TriangleAlert className="ui-icon" aria-hidden="true" /> {peopleDeleteWarnings[person.id]}
                             </p>
                           )}
                         </div>
@@ -754,7 +794,7 @@ export default function RoomHomeClient({ roomId }: { roomId: string }) {
             {isDemo && (
               <section className="rounded-xl border border-neutral-200 bg-white p-6 shadow-sm">
                 <h2 className="text-base font-bold text-neutral-900 flex items-center gap-2">
-                  <span>🧪</span>
+                  <span><FlaskConical className="ui-icon" aria-hidden="true" /></span>
                   <span>デモ操作</span>
                 </h2>
                 <p className="mt-1 text-xs text-neutral-600">
@@ -799,11 +839,11 @@ export default function RoomHomeClient({ roomId }: { roomId: string }) {
             {membership.role === "family" && (
               <section className="rounded-xl border border-neutral-200 bg-white p-6 shadow-sm">
                 <h2 className="text-base font-bold text-neutral-900 flex items-center gap-2">
-                  <span>✉️</span>
+                  <span><Mail className="ui-icon" aria-hidden="true" /></span>
                   <span>招待リンクの発行</span>
                 </h2>
                 <p className="mt-1 text-xs text-neutral-600">
-                  リンクは24時間有効で、1回だけ使えます。送る相手に合わせて発行してください。
+                  リンクは発行から24時間、何人でも使えます。送る相手に合わせて発行してください。
                 </p>
                 <div className="mt-4 flex flex-wrap gap-2 text-xs sm:text-sm">
                   <button
@@ -827,15 +867,30 @@ export default function RoomHomeClient({ roomId }: { roomId: string }) {
                 {(["family", "careManager"] as MemberRole[]).map((role) =>
                   inviteUrls[role] ? (
                     <div key={role} className="mt-4">
-                      <label className="text-xs font-semibold text-neutral-700">
+                      <label htmlFor={`invite-url-${role}`} className="text-xs font-semibold text-neutral-700">
                         {role === "family" ? "家族用" : "ケアマネ用"}リンク
                       </label>
-                      <input
-                        readOnly
-                        className="mt-1 w-full rounded-lg border border-neutral-300 px-3 py-2 text-xs font-mono text-neutral-800 bg-neutral-50 focus:bg-white"
-                        value={inviteUrls[role]}
-                        onFocus={(e) => e.target.select()}
-                      />
+                      <div className="mt-1 flex items-center rounded-lg border border-neutral-300 bg-neutral-50 focus-within:border-indigo-500">
+                        <input
+                          id={`invite-url-${role}`}
+                          readOnly
+                          className="min-w-0 flex-1 rounded-l-lg bg-transparent px-3 py-2 font-mono text-xs text-neutral-800"
+                          value={inviteUrls[role]}
+                          onFocus={(e) => e.target.select()}
+                        />
+                        <button
+                          type="button"
+                          aria-label={`${role === "family" ? "家族用" : "ケアマネ用"}リンクをコピー`}
+                          title={copiedUrl === inviteUrls[role] ? "コピーしました" : "リンクをコピー"}
+                          onClick={() => void copyInvite(inviteUrls[role]!)}
+                          className="inline-flex size-11 shrink-0 items-center justify-center rounded-r-lg text-indigo-700 hover:bg-indigo-50 focus-visible:outline-2"
+                        >
+                          {copiedUrl === inviteUrls[role]
+                            ? <Check size={18} aria-hidden="true" />
+                            : <Copy size={18} aria-hidden="true" />}
+                        </button>
+                      </div>
+                      {copiedUrl === inviteUrls[role] && <span role="status" className="sr-only">コピーしました</span>}
                     </div>
                   ) : null,
                 )}
